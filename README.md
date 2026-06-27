@@ -8,9 +8,10 @@ below has its own deep-dive page under [`docs/`](docs/); this page is the map.
 | Project | Role | Language | Deploy target |
 |---|---|---|---|
 | [identity-platform-go](docs/identity-platform-go.md) | OAuth 2.1 / OIDC identity provider (7 services) | Go | Fly.io |
-| [go-platform](docs/go-platform.md) | Shared Go library (errors, DI, HTTP, JWT) | Go | Module registry |
+| [go-platform](docs/go-platform.md) | Shared Go library (errors, DI, HTTP, JWT, audit) | Go | Module registry |
 | [jk-mcp-nwsl](docs/jk-mcp-nwsl.md) | MCP server for NWSL data | Python | Fly.io |
 | [jk-mcp-ecnl](docs/jk-mcp-ecnl.md) | MCP server for ECNL / ECRL youth soccer | Python | Fly.io |
+| [jk-metering](docs/jk-metering.md) | Audit-events → Lago metering shim | Go | Fly.io |
 | [cross-cutting concerns](docs/cross-cutting.md) | Patterns shared across the portfolio | — | — |
 | [agentic posture](docs/agentic-posture.md) | Gap analysis + phased roadmap against WSO2's reference model | — | — |
 | [billing + metering setup](docs/billing-and-metering-setup.md) | Phase B prerequisite — self-hosted Lago + Stripe setup sequence | — | — |
@@ -43,8 +44,15 @@ graph LR
         ECNL[jk-mcp-ecnl]
     end
 
+    subgraph Billing["Billing (Fly.io)"]
+        Audit[(audit_events)]
+        Meter[jk-metering]
+        Lago[(self-hosted Lago)]
+        Stripe[(Stripe)]
+    end
+
     subgraph Shared["Shared (Go module)"]
-        GP[go-platform<br/>apperrors • container<br/>httputil • jwtutil]
+        GP[go-platform<br/>apperrors • container<br/>httputil • jwtutil • audit]
     end
 
     Web -->|HTTPS| Gateway
@@ -70,6 +78,16 @@ graph LR
 
     NWSL -->|public APIs| ESPN[(ESPN<br/>SDP/Opta<br/>NWSL CMS)]
     ECNL -->|public API| AO[(AthleteOne /<br/>Total Global Sports)]
+
+    AS -.audit events.-> Audit
+    IS -.audit events.-> Audit
+    CRS -.audit events.-> Audit
+    TIS -.audit events.-> Audit
+    APS -.audit events.-> Audit
+    LUI -.audit events.-> Audit
+    Audit -->|poll| Meter
+    Meter -->|usage events| Lago
+    Lago <-->|connector| Stripe
 ```
 
 ## How the pieces fit
@@ -85,6 +103,11 @@ graph LR
 - The api-gateway (separate repo) fronts all public traffic, terminating TLS and
   enforcing rate limits, caching, and circuit-breaking before forwarding to the
   identity or MCP backends.
+- **`jk-metering`** is the worker that completes the billing pipeline. Every
+  identity service writes audit events through `go-platform/audit/durable` to a
+  shared `audit_events` table; `jk-metering` polls the table, transforms each
+  event into a Lago event, and posts to self-hosted Lago. Lago routes the
+  resulting invoices to Stripe via its native connector.
 
 ## Reading order
 

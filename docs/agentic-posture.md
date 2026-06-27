@@ -118,7 +118,7 @@ graph TB
 | LLM evaluation / agent test harness | Missing | MCP servers |
 | End-to-end tracing (LLM ↔ agent ↔ tool ↔ system) | Missing — no OTel | `go-platform` + all services |
 | Egress control plane (outbound credentials, cost, DLP) | Deferred — start as a library, promote when triggered | `go-platform` → future `jk-egress-gateway` |
-| Usage accounting / metering / billing | **Phase B (prerequisite, blocking further agentic work)** — self-hosted Lago + Stripe via the existing audit pipeline | identity-platform-go ADR-0019; new `jk-metering`; self-hosted Lago on Fly.io |
+| Usage accounting / metering / billing | **Phase B (prerequisite, blocking further agentic work)** — self-hosted Lago + Stripe via the existing audit pipeline | identity-platform-go ADR-0019; [`jk-metering`](jk-metering.md); self-hosted Lago on Fly.io |
 | Context graph / vector store / RAG | Missing | out of portfolio scope |
 | Workflow orchestrator | Missing | out of portfolio scope |
 
@@ -292,7 +292,7 @@ one without retrofit.
   or NATS JetStream)
 - Extend ADR-0018 emitters with the resource taxonomy fields
   (`resource_kind`, `resource_id`, `resource_parent`, `resource_path`)
-- Stand up `jk-metering` (the property-pump shim) and verify Lago event
+- Stand up [`jk-metering`](jk-metering.md) (the property-pump shim) and verify Lago event
   ingestion end to end
 - Add the `/metering/events` ingestion endpoint for web apps and SPAs
 - Wire `login-ui` plan selection + Stripe Checkout redirect

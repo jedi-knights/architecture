@@ -141,21 +141,27 @@ For Python MCP servers, mirror via structlog with identical field names.
 
 ### 5. Stand up `jk-metering`
 
-New repo. A small Go service that:
+Scaffolded at [`jedi-knights/jk-metering`](https://github.com/jedi-knights/jk-metering)
+(see [`jk-metering.md`](jk-metering.md) for the architecture page). A
+small Go worker that:
 
-- Subscribes to the durable sink (Postgres `LISTEN/NOTIFY` or NATS
-  JetStream consumer)
-- Transforms each audit event into one Lago event with
-  `code = "usage"`, all fields flattened to Lago properties
-- Resolves `external_subscription_id` via Lago's customer API (cached)
-- Pushes via Lago's Event API
-- Has a DLQ for transform failures and a reconciliation mode that
-  replays from a timestamp
+- Polls the `audit_events` table (`WHERE consumed_at IS NULL ORDER BY
+  created_at ASC LIMIT N`); `LISTEN/NOTIFY` is a deferred optimisation
+- Transforms each event into one Lago event with `code = "usage"`, all
+  fields flattened to Lago properties
+- Maps `external_subscription_id` from a configurable audit field
+  (`subject` / `actor` / `client`)
+- Pushes via Lago's `POST /api/v1/events`
+- Marks `consumed_at` on success; combined with the ULID
+  `transaction_id` Lago dedupes on, the pipeline is exactly-once
+  at-rest from emission through billing
 
-Deploy as a Fly app with horizontal scaling on event lag.
+Deploy as a Fly worker (no public HTTP). The repo includes a
+`Dockerfile` and `fly.toml` configured for one always-on
+`shared-cpu-1x` machine.
 
 Smoke test: emit a synthetic `tool_invoked` event from a backend service;
-confirm a matching Lago event lands within 5 seconds.
+confirm a matching Lago event lands within `METERING_METERING_POLL_INTERVAL_SECONDS`.
 
 ### 6. Metering ingestion endpoint for web apps
 
