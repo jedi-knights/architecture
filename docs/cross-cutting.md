@@ -70,6 +70,19 @@ model is uniform regardless of language.
 Backend services don't expose public IPs; they're reachable only via Flycast on
 the private network.
 
+### Ingress today, egress later
+
+The portfolio runs a single (ingress) gateway because every outbound call goes
+to a public, unauthenticated, read-only source today. A dedicated egress
+gateway is planned once any of these land: paid LLM APIs, authenticated SaaS
+APIs, tools that write to external systems, or RFC 9396 `resource` types that
+let agents choose destinations dynamically. Until then, the egress contract
+(retry, circuit-break, outbound audit, OTel egress spans) lives as a library
+in `go-platform/httputil` so call sites already speak the future
+gateway's shape. See
+[`agentic-posture.md`](agentic-posture.md#ingress-vs-egress) for the trigger
+list and migration path.
+
 ## MCP transports
 
 Both MCP servers support the same two transports, switched by `MCP_TRANSPORT`:

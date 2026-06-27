@@ -117,12 +117,45 @@ graph TB
 | Agent-aware audit events | Partial — request logs only | all services + `go-platform` |
 | LLM evaluation / agent test harness | Missing | MCP servers |
 | End-to-end tracing (LLM ↔ agent ↔ tool ↔ system) | Missing — no OTel | `go-platform` + all services |
+| Egress control plane (outbound credentials, cost, DLP) | Deferred — start as a library, promote when triggered | `go-platform` → future `jk-egress-gateway` |
 | Context graph / vector store / RAG | Missing | out of portfolio scope |
 | Workflow orchestrator | Missing | out of portfolio scope |
 
 Two rows are explicitly out of scope: the portfolio is read-only soccer data
 and identity; we don't need a context graph or a workflow engine to claim
 agent-readiness.
+
+## Ingress vs egress
+
+Today `jk-api-gateway` is the only gateway — fronting inbound traffic to
+auth-server, the MCP servers, and any future identity-platform service. There
+is **no dedicated egress gateway** because the outbound surface is narrow:
+every upstream call goes to a public, unauthenticated, read-only data source.
+The in-process `Retry(Cache(HTTP))` composition in each MCP server covers what
+an egress gateway would otherwise enforce.
+
+That changes as the portfolio grows. The triggers that warrant a separate
+egress plane:
+
+| Trigger | What egress would enforce |
+|---|---|
+| Paid LLM or model-routing API | Cost metering, key rotation, per-agent budget caps |
+| Authenticated SaaS APIs (Stripe, Slack, GitHub) | Outbound credential vault, token refresh, scope audit |
+| Tools that write to external systems | DLP scanning, per-action approval, blast-radius caps |
+| Dynamic destinations from RFC 9396 `resource` details | Allowlist enforcement at one chokepoint, not N adapters |
+| Compliance / audit of all outbound bytes by agent | Single audit point for outbound calls |
+
+**Path forward.** Build the *policy shape* of an egress gateway as a library
+first — put retry, circuit-break, OTel egress spans, and structured outbound
+audit into `go-platform/httputil` (and the equivalent Python helper for the
+MCP servers). Call sites speak the contract immediately and the cost of
+promoting it later is mechanical rather than exploratory.
+
+When the first trigger above lands, lift the library into a
+`jk-egress-gateway` service that mirrors the ingress gateway shape — a single
+chokepoint for outbound credentials, rate limits, and audit. The phased
+roadmap below tracks the library step (P1) and reserves the gateway lift as
+the first item past P2.
 
 ## Target architecture: agent identity flow
 
@@ -190,6 +223,9 @@ Agents can delegate, and MCP tool calls are policy-enforced.
 - `jk-mcp-ecnl` same changes
 - Per-tool annotation extension (`sensitivity`, `cost_class`, `rate_limit_class`)
 - OTel traces propagating from auth-server → MCP server → upstream API
+- Egress concerns (retry, circuit-break, outbound audit, OTel egress spans)
+  hardened in `go-platform/httputil` and mirrored in the MCP server template,
+  so call sites already speak the future egress-gateway contract
 
 **Acceptance:** agent A exchanges its token for a delegated token, the call
 lands on `jk-mcp-nwsl` over Streamable HTTP, the MCP server consults
@@ -210,6 +246,20 @@ Agents are measured, registered centrally, and continuously evaluated.
 
 **Acceptance:** drift report shows pass/fail per tool per prompt; gap matrix
 above has no "Missing" rows in scope; every "Partial" row has explicit rationale.
+
+### Beyond P2 — trigger-driven additions
+
+These items aren't on a calendar — they ship when the corresponding trigger
+in the [Ingress vs egress](#ingress-vs-egress) table fires:
+
+- **`jk-egress-gateway`** — promote the egress library into a dedicated
+  service. Single chokepoint for outbound credentials, per-agent rate limits,
+  DLP scanning, and outbound audit. Mirrors `jk-api-gateway` shape.
+- **MCP hub / tool registry** — separate repo cataloging MCP endpoints + tool
+  schemas + per-tool policies. Only needed once a third MCP server lands or
+  agents start choosing destinations dynamically.
+- **Context graph / RAG layer** — only if tools graduate from read-on-demand
+  to persistent semantic memory.
 
 ## Per-repo work items
 
@@ -243,8 +293,13 @@ Two new packages:
   JSON, OTel log, file). Used by identity services and (by mirror) MCP servers.
 - **`otel`** — minimal OpenTelemetry bootstrap. Span helpers, context
   propagation, env-based exporter selection. Foundation for end-to-end traces.
+- **`httputil` extension — egress policy primitives.** Retry, circuit-break,
+  outbound audit, and OTel egress spans hardened in the same chain shape as
+  the existing inbound middleware. Lets services speak the egress-gateway
+  contract today even though the gateway itself doesn't exist yet.
 
-Both ship under the existing semantic-release pipeline.
+Both new packages and the `httputil` extension ship under the existing
+semantic-release pipeline.
 
 ### `jk-mcp-nwsl` and `jk-mcp-ecnl`
 
