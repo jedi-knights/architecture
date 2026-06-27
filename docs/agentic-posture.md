@@ -118,7 +118,7 @@ graph TB
 | LLM evaluation / agent test harness | Missing | MCP servers |
 | End-to-end tracing (LLM ↔ agent ↔ tool ↔ system) | Missing — no OTel | `go-platform` + all services |
 | Egress control plane (outbound credentials, cost, DLP) | Deferred — start as a library, promote when triggered | `go-platform` → future `jk-egress-gateway` |
-| Usage accounting / metering (per user, agent, tool, endpoint) | Deferred — audit schema covers the data plumbing; metering job + Lago when triggered | audit pipeline → future metering shim + [Lago](https://www.getlago.com) |
+| Usage accounting / metering / billing | **Phase B (prerequisite, blocking further agentic work)** — self-hosted Lago + Stripe via the existing audit pipeline | identity-platform-go ADR-0019; new `jk-metering`; self-hosted Lago on Fly.io |
 | Context graph / vector store / RAG | Missing | out of portfolio scope |
 | Workflow orchestrator | Missing | out of portfolio scope |
 
@@ -160,9 +160,15 @@ the first item past P2.
 
 ## Usage accounting
 
-There is no separate accounting component today, and there does not need to
-be. ADR-0018's audit envelope already carries every field a usage meter
-needs:
+**Status: Phase B prerequisite.** Billing readiness blocks further agentic
+capability work — the portfolio must be able to sell tool use, server use,
+endpoint use, API use, web-application use, and feature use (à la carte or
+bundled) before P0 through P2 land. The full design is in
+**identity-platform-go ADR-0019**; the concrete deployment checklist is
+**[`billing-and-metering-setup.md`](billing-and-metering-setup.md)**. This
+section summarises the data plumbing rationale.
+
+ADR-0018's audit envelope already carries every field a usage meter needs:
 
 | Audit field | Accounting role |
 |---|---|
@@ -185,40 +191,42 @@ durability differs.
 
 ### When to build it
 
-Same trigger discipline as the egress gateway. Wire the metering job when
-**any** of:
+**Now.** Promoted from trigger-driven to **Phase B prerequisite** per
+portfolio direction. The same triggers (paid LLM, per-cost quotas, usage
+analytics) all apply, but the foundation ships in advance so subsequent
+agentic work doesn't have to retrofit billing into already-deployed
+surfaces.
 
-- You charge anyone for tool calls
-- You need per-user or per-agent quotas (rate limit by *cost*, not just RPS)
-- You add paid LLM APIs and need cost allocation to the agent or user
-- You need usage analytics for product decisions ("which tools matter")
+### Architecture
 
-### Lago fit
-
-[Lago](https://www.getlago.com) is the natural recipient: open source,
-self-hostable, event-ingestion-first, built for usage-based billing rather
-than seats. The data flow is mechanical:
+Self-hosted [Lago](https://www.getlago.com) is the metering and invoicing
+engine; [Stripe](https://stripe.com) is the payment processor (cards, tax,
+dunning) plugged in via Lago's native connector. All customer and usage
+data stays on portfolio infrastructure; Stripe sees only payment data and
+card details (off our PCI scope via Stripe Checkout / Customer Portal).
 
 ```mermaid
 graph LR
-    Services[auth-server<br/>MCP servers<br/>policy service] -->|ADR-0018 events| Audit[audit pipeline<br/>OTel log / broker]
-    Audit --> Meter[metering shim<br/>filter • transform]
-    Meter -->|Lago Event API| Lago[(Lago)]
-    Lago --> Inv[invoices<br/>plans • subscriptions]
-    Lago --> Quota[periodic quota<br/>reconciliation]
+    Services[auth-server<br/>MCP servers<br/>policy service<br/>web apps] -->|ADR-0018 events| Audit[audit pipeline<br/>durable sink]
+    Audit --> Meter[jk-metering<br/>property pump]
+    Meter -->|Lago Event API<br/>code=usage| Lago[(Lago<br/>self-hosted on Fly)]
+    Lago --> Inv[plans • subscriptions<br/>billable metrics<br/>invoices • wallets]
+    Lago <-->|native connector| Stripe[(Stripe<br/>Checkout • Tax • cards)]
+    LUI[login-ui] -->|plan list / Checkout session| Lago
+    LUI -->|card collection| Stripe
 ```
 
-Mapping:
+Mapping audit fields to Lago primitives:
 
 | Lago primitive | Source in this portfolio |
 |---|---|
-| **Billable metric** (`count`, `sum`, `latest`, `unique_count`) | Aggregation over `event_type` + `attrs` |
-| **Customer** | `subject_id` (human-billed) or `agent_id` (agent-billed) |
-| **Event** | One-to-one with ADR-0018 events; the shim renames fields |
-| **Plan / subscription** | Per-RP, per-agent, or per-tenant commercial terms |
-| **Invoices / wallets** | Lago default features |
+| **Event** (`code = "usage"`) | One per ADR-0018 audit event; the shim is a generic JSON property pump |
+| **Billable metric** (`count`, `sum`, `latest`, `unique_count` + filters) | A SKU. Filters on `resource_kind`, `resource_parent`, `resource_path`, `event_type`, `actor_type` discriminate tools, servers, endpoints, APIs, web apps, features |
+| **Plan / subscription** | A bundle (flat fee + quotas + overages) or pay-as-you-go shape |
+| **Customer** | End user `subject_id` by default; per-plan override to `actor_id` or a tenant claim |
+| **Invoices / wallets** | Lago defaults; pushed to Stripe via connector for payment |
 
-What Lago **does not** cover — stays in the portfolio:
+What Lago and Stripe **do not** cover — stays in the portfolio:
 
 - **Synchronous quota enforcement** at the request boundary lives in
   `authorization-policy-service` backed by a Redis counter. Lago reconciles
@@ -228,9 +236,8 @@ What Lago **does not** cover — stays in the portfolio:
   after the fact.
 - **Per-call authorization decisions** stay with the policy engine.
 
-The same trigger that warrants the egress gateway typically warrants the
-metering pipeline — they share infrastructure (audit, identity claims,
-delegation chain). Reserved as a trigger-driven addition past P2.
+See **[`billing-and-metering-setup.md`](billing-and-metering-setup.md)** for
+deployment, configuration, and first-SKU walkthroughs.
 
 ## Target architecture: agent identity flow
 
@@ -266,8 +273,42 @@ sequenceDiagram
 
 ## Roadmap
 
-Three phases. Each phase has a concrete acceptance criterion; we don't move on
-until the criterion passes.
+Four phases. Each phase has a concrete acceptance criterion; we don't move on
+until the criterion passes. **Phase B is a hard gate** — no P0–P2 work
+ships until billing readiness is satisfied.
+
+### Phase B — billing readiness (prerequisite)
+
+Stand up the metering pipeline and the billing engine before adding
+further agentic capability so every new capability can be sold from day
+one without retrofit.
+
+**Work items:**
+
+- Deploy self-hosted Lago to Fly.io (Postgres + Redis sidecars)
+- Connect a Stripe account; enable Stripe Checkout, Customer Portal,
+  Stripe Tax; wire Lago's native Stripe connector
+- Ship `go-platform/audit` with a `durable` sink (at-least-once Postgres
+  or NATS JetStream)
+- Extend ADR-0018 emitters with the resource taxonomy fields
+  (`resource_kind`, `resource_id`, `resource_parent`, `resource_path`)
+- Stand up `jk-metering` (the property-pump shim) and verify Lago event
+  ingestion end to end
+- Add the `/metering/events` ingestion endpoint for web apps and SPAs
+- Wire `login-ui` plan selection + Stripe Checkout redirect
+- Define the first billable metrics in Lago covering: one MCP tool, one
+  full MCP server, one API endpoint, one whole API
+- Define the first plans: Free, Starter (à la carte / pay-as-you-go),
+  and Pro (bundle with included quotas)
+
+**Acceptance:** a brand-new user signs up via login-ui → picks the
+Starter plan → completes Stripe Checkout → makes an MCP tool call →
+the call is metered, attributed to their `subject_id`, surfaces in Lago
+as a `usage` event, and at the end of the cycle Lago generates an invoice
+that Stripe charges and marks paid. Operators can add a new billable
+metric or a new bundle in Lago admin without a portfolio release.
+
+See `billing-and-metering-setup.md` for the concrete sequence.
 
 ### P0 — foundations
 
@@ -330,10 +371,6 @@ in the [Ingress vs egress](#ingress-vs-egress) table fires:
 - **`jk-egress-gateway`** — promote the egress library into a dedicated
   service. Single chokepoint for outbound credentials, per-agent rate limits,
   DLP scanning, and outbound audit. Mirrors `jk-api-gateway` shape.
-- **Metering shim + Lago integration** — consume ADR-0018 events, transform
-  to Lago's Event API, drive billable metrics and invoices. Add the
-  at-least-once audit sink at the same time so accounting can't drop. See
-  [Usage accounting](#usage-accounting) for the shape.
 - **MCP hub / tool registry** — separate repo cataloging MCP endpoints + tool
   schemas + per-tool policies. Only needed once a third MCP server lands or
   agents start choosing destinations dynamically.

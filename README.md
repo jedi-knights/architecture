@@ -13,6 +13,7 @@ below has its own deep-dive page under [`docs/`](docs/); this page is the map.
 | [jk-mcp-ecnl](docs/jk-mcp-ecnl.md) | MCP server for ECNL / ECRL youth soccer | Python | Fly.io |
 | [cross-cutting concerns](docs/cross-cutting.md) | Patterns shared across the portfolio | — | — |
 | [agentic posture](docs/agentic-posture.md) | Gap analysis + phased roadmap against WSO2's reference model | — | — |
+| [billing + metering setup](docs/billing-and-metering-setup.md) | Phase B prerequisite — self-hosted Lago + Stripe setup sequence | — | — |
 
 ## System map
 
