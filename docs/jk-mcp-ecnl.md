@@ -191,6 +191,15 @@ architecture + Fly.io). The distinctions:
 | Bracket support | Yes (flight playoffs) | Challenge Cup standings instead |
 | Edge | Behind jk-api-gateway at `/mcp/ecnl` | Direct Fly subdomain `jk-mcp-nwsl.fly.dev` |
 
+## Tool authorization roadmap
+
+Same posture and same plan as [`jk-mcp-nwsl`](jk-mcp-nwsl.md#tool-authorization-roadmap):
+tools are open today; the [agentic posture roadmap](agentic-posture.md) adds a
+bearer-token requirement on the Streamable HTTP transport, an authorization
+port that consults `authorization-policy-service`, extended tool annotations
+(`sensitivity`, `cost_class`, `rate_limit_class`), and structured audit events
+per the planned `go-platform/audit` schema.
+
 ## Non-obvious details
 
 - **Event names *are* the schema.** Classification (league / gender / conference

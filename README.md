@@ -12,6 +12,7 @@ below has its own deep-dive page under [`docs/`](docs/); this page is the map.
 | [jk-mcp-nwsl](docs/jk-mcp-nwsl.md) | MCP server for NWSL data | Python | Fly.io |
 | [jk-mcp-ecnl](docs/jk-mcp-ecnl.md) | MCP server for ECNL / ECRL youth soccer | Python | Fly.io |
 | [cross-cutting concerns](docs/cross-cutting.md) | Patterns shared across the portfolio | — | — |
+| [agentic posture](docs/agentic-posture.md) | Gap analysis + phased roadmap against WSO2's reference model | — | — |
 
 ## System map
 
@@ -90,7 +91,10 @@ graph LR
 2. **[`docs/cross-cutting.md`](docs/cross-cutting.md)** explains the patterns
    repeated across every project (hexagonal architecture, MCP transport choices,
    Conventional Commits + semantic-release, Fly.io deploys).
-3. The per-project pages are independent — open the one you need.
+3. **[`docs/agentic-posture.md`](docs/agentic-posture.md)** maps the portfolio
+   onto an "agentic enterprise" reference model and tracks the phased roadmap
+   to close the gaps.
+4. The per-project pages are independent — open the one you need.
 
 ## Repo conventions
 

@@ -214,6 +214,18 @@ implicit/hybrid flows (deprecated by OAuth 2.1).
 
 Full ADRs live at `docs/adr/` in the source repo.
 
+### Planned ADRs (agentic posture)
+
+Four additional ADRs are planned to make this platform agent-aware. See
+[`agentic-posture.md`](agentic-posture.md) for the gap analysis and rollout.
+
+| # | Title | Phase |
+|---|---|---|
+| 0015 | Agent principal type (`actor_type`, `agent_id` claims) | P0 |
+| 0016 | Token Exchange (RFC 8693) for A2A delegation | P1 |
+| 0017 | Rich Authorization Requests (RFC 9396) | P1 |
+| 0018 | Agent audit event schema | P2 |
+
 ## Non-obvious design choices worth knowing
 
 - **Login challenge opacity.** The full `/oauth/authorize` request is validated,

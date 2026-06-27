@@ -155,6 +155,21 @@ sources are public; the server forwards tool arguments without enrichment. No
 cookies, no analytics, no telemetry. Documented in `PRIVACY.md` for Anthropic
 Software Directory compliance.
 
+## Tool authorization roadmap
+
+Tools are currently open on both transports — annotations (`readOnlyHint`)
+signal *intent* but nothing enforces it at runtime. The
+[agentic posture roadmap](agentic-posture.md) closes this in P1:
+
+- Streamable HTTP transport will require a bearer token verified against
+  `identity-platform-go` JWKS. Stdio remains unauthenticated (subprocess trust
+  boundary).
+- A new `ports/inbound/authorization.py` will consult
+  `authorization-policy-service` with `{actor_type, agent_id, tool_name, args}`
+  before every dispatch.
+- Tool annotations extend to `sensitivity`, `cost_class`, `rate_limit_class`.
+- Per-call audit events emitted via the planned `go-platform/audit` schema.
+
 ## Non-obvious details
 
 - **Adapter composition over middleware.** Cross-cutting concerns are layered as

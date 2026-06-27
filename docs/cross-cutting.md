@@ -129,6 +129,26 @@ lint + format in CI.
 | Compile-time interface checks | Go services (`var _ Port = (*Adapter)(nil)`) |
 | `typ` header enforcement on JWTs | `go-platform/jwtutil`, used by identity services |
 
+## Agent identity and tool authorization
+
+The portfolio is being extended so autonomous AI agents are first-class
+principals — distinct from human users and machine clients — with scoped
+credentials, policy-enforced tool access, and end-to-end audit. The gap
+analysis and phased roadmap live in [`agentic-posture.md`](agentic-posture.md).
+
+In short:
+
+- **Identity** — `identity-platform-go` will distinguish agent principals via
+  `actor_type=agent` + `agent_id` claims (ADR-0015), support agent-to-agent
+  delegation via token exchange (ADR-0016, RFC 8693), and per-call fine-grained
+  permissions via RAR (ADR-0017, RFC 9396).
+- **Tool authorization** — both MCP servers will gain a policy port on the
+  Streamable HTTP transport that consults `authorization-policy-service`
+  before every tool dispatch.
+- **Observability** — new `go-platform/audit` and `go-platform/otel` packages
+  give every service a single audit-event schema and end-to-end traces from
+  token issuance through tool call to upstream API.
+
 ## Privacy / submission posture (MCP servers)
 
 Both MCP servers are submitted to the Anthropic Software Directory and follow
