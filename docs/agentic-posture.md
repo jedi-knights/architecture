@@ -105,18 +105,18 @@ graph TB
 
 | WSO2 capability | Status | Owning repo |
 |---|---|---|
-| Agent identity (distinct from human) | Missing — no `actor_type` claim | `identity-platform-go` |
-| Scoped agent credentials | Partial — OAuth scopes exist; no agent semantics | `identity-platform-go` |
+| Agent identity (distinct from human) | **Implemented** — `actor_type` + `agent_id` claims flow through every issued token (ADR-0015) | `identity-platform-go`, `go-platform/jwtutil` |
+| Scoped agent credentials | Partial — OAuth scopes exist; agent semantics ride on `actor_type` but per-call RAR scopes pending (ADR-0017) | `identity-platform-go` |
 | Token Exchange (RFC 8693) for A2A delegation | Missing | `identity-platform-go` |
 | Rich Authorization Requests (RFC 9396) | Missing | `identity-platform-go` |
-| Dynamic Client Registration (RFC 7591/7592) | Designed (ADR-0013), impl pending | `identity-platform-go` |
-| Authorization Server Metadata (RFC 8414) | Designed (ADR-0012), impl pending | `identity-platform-go` |
+| Dynamic Client Registration (RFC 7591/7592) | **Implemented** — `POST /register` + `GET/PUT/DELETE /register/{id}` on client-registry-service (ADR-0013) | `identity-platform-go` |
+| Authorization Server Metadata (RFC 8414) | **Implemented** — `/.well-known/oauth-authorization-server` + `/.well-known/openid-configuration` on auth-server (ADR-0012) | `identity-platform-go` |
 | MCP tool authorization (per-tool, per-agent) | Missing — tools fully open | `jk-mcp-nwsl`, `jk-mcp-ecnl` |
 | Tool registry / MCP hub | Missing | new repo or via gateway |
 | Policy enforcement on tool invocation | Missing | MCP servers + new shared lib |
-| Agent-aware audit events | Partial — request logs only | all services + `go-platform` |
+| Agent-aware audit events | **Implemented** — every paid surface emits ADR-0018 events; durable Postgres sink (ADR-0019) | `go-platform/audit`, all identity services |
 | LLM evaluation / agent test harness | Missing | MCP servers |
-| End-to-end tracing (LLM ↔ agent ↔ tool ↔ system) | Missing — no OTel | `go-platform` + all services |
+| End-to-end tracing (LLM ↔ agent ↔ tool ↔ system) | Partial — `go-platform/otel` package available; identity-service wiring pending | `go-platform` + all services |
 | Egress control plane (outbound credentials, cost, DLP) | Deferred — start as a library, promote when triggered | `go-platform` → future `jk-egress-gateway` |
 | Usage accounting / metering / billing | **Phase B (prerequisite, blocking further agentic work)** — self-hosted Lago + Stripe via the existing audit pipeline | identity-platform-go ADR-0019; [`jk-metering`](jk-metering.md); self-hosted Lago on Fly.io |
 | Context graph / vector store / RAG | Missing | out of portfolio scope |
@@ -312,22 +312,27 @@ metric or a new bundle in Lago admin without a portfolio release.
 
 See `billing-and-metering-setup.md` for the concrete sequence.
 
-### P0 — foundations
+### P0 — foundations ✅
 
-Agents become a first-class principal type with audit trails.
+Agents become a first-class principal type with audit trails. **Phase
+complete as of 2026-06-27** — every work item below is merged on the
+respective main branch.
 
 **Work items:**
 
-- `identity-platform-go` ADR-0015 (`actor_type`, `agent_id` claims) draft + implementation
-- `go-platform/audit` package: structured event schema + first release
-- `go-platform/otel` package: minimal OTel bootstrap + first release
-- Audit wired into auth-server (every token issued / introspected emits an event)
-- Confirm and finish ADR-0012 (`/.well-known`) and ADR-0013 (DCR) — agents
-  cannot self-onboard without DCR
+- ✅ `identity-platform-go` ADR-0015 (`actor_type`, `agent_id` claims) — `go-platform/jwtutil` PR #17, propagation PRs through auth-server / client-registry / identity-service
+- ✅ `go-platform/audit` package: structured event schema + first release — `go-platform` PR #15
+- ✅ `go-platform/audit/durable` Postgres-backed at-least-once sink — `go-platform` PR #16 (ADR-0019)
+- ✅ `go-platform/otel` package: minimal OTel bootstrap + first release — `go-platform` PR #18
+- ✅ Audit wired into every paid surface (auth-server, identity-service, client-registry-service, token-introspection-service, authorization-policy-service, login-ui)
+- ✅ ADR-0012 RFC 8414 + OIDC Discovery metadata — `identity-platform-go` PR #83
+- ✅ ADR-0013 RFC 7591 + RFC 7592 Dynamic Client Registration — `identity-platform-go` PRs #84 and #85
 
-**Acceptance:** an OAuth client registered via DCR with `actor_type=agent`
+**Acceptance — met:** an OAuth client registered via DCR with `actor_type=agent`
 obtains a token; every issuance and use of that token appears in a structured
-audit log with `agent_id`.
+audit log with `agent_id`. The metadata document advertises the registration
+endpoint when the operator sets `AUTH_METADATA_REGISTRATION_ENDPOINT`, so an
+agent's client library can bootstrap end-to-end from one issuer URL.
 
 ### P1 — delegation + tool authorization
 
@@ -391,15 +396,14 @@ in the [Ingress vs egress](#ingress-vs-egress) table fires:
 
 Four new ADRs, implemented in order:
 
-| ADR | What | Status target by end of phase |
+| ADR | What | Status |
 |---|---|---|
-| 0015 | `actor_type` + `agent_id` claims | P0 |
-| 0016 | RFC 8693 token exchange | P1 |
-| 0017 | RFC 9396 rich authorization requests | P1 |
-| 0018 | Agent audit event schema | P2 |
-
-Also confirm — and finish if needed — ADR-0012 (`/.well-known`) and ADR-0013
-(DCR). Both are designed; agents cannot self-onboard without both shipped.
+| 0012 | RFC 8414 + OIDC Discovery metadata | ✅ Shipped (PR #83) |
+| 0013 | RFC 7591 + RFC 7592 DCR | ✅ Shipped (PRs #84 + #85) |
+| 0015 | `actor_type` + `agent_id` claims | ✅ Shipped (P0) |
+| 0016 | RFC 8693 token exchange | Planned (P1) |
+| 0017 | RFC 9396 rich authorization requests | Planned (P1) |
+| 0018 | Agent audit event schema | ✅ Shipped (every paid surface emits) |
 
 ### `go-platform`
 
