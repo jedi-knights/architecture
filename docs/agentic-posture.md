@@ -128,7 +128,6 @@ agent-readiness.
 
 ```mermaid
 sequenceDiagram
-    autonomous Claude as Agent (Claude)
     autonumber
     participant A as Agent (Claude)
     participant CR as client-registry<br/>(DCR /register)
@@ -142,7 +141,7 @@ sequenceDiagram
 
     Note over A,AS: P0 — agent token with new claims
     A->>AS: POST /oauth/token (client_credentials)
-    AS->>AS: mint token with actor_type=agent, agent_id=<client_id>
+    AS->>AS: mint token (actor_type=agent, agent_id=client_id)
     AS-->>A: access_token (RS256, at+jwt)
 
     Note over A,MCP: P1 — policy-enforced tool call
