@@ -118,6 +118,7 @@ graph TB
 | LLM evaluation / agent test harness | Missing | MCP servers |
 | End-to-end tracing (LLM ↔ agent ↔ tool ↔ system) | Missing — no OTel | `go-platform` + all services |
 | Egress control plane (outbound credentials, cost, DLP) | Deferred — start as a library, promote when triggered | `go-platform` → future `jk-egress-gateway` |
+| Usage accounting / metering (per user, agent, tool, endpoint) | Deferred — audit schema covers the data plumbing; metering job + Lago when triggered | audit pipeline → future metering shim + [Lago](https://www.getlago.com) |
 | Context graph / vector store / RAG | Missing | out of portfolio scope |
 | Workflow orchestrator | Missing | out of portfolio scope |
 
@@ -156,6 +157,80 @@ When the first trigger above lands, lift the library into a
 chokepoint for outbound credentials, rate limits, and audit. The phased
 roadmap below tracks the library step (P1) and reserves the gateway lift as
 the first item past P2.
+
+## Usage accounting
+
+There is no separate accounting component today, and there does not need to
+be. ADR-0018's audit envelope already carries every field a usage meter
+needs:
+
+| Audit field | Accounting role |
+|---|---|
+| `actor_type` + `actor_id` | Who to bill / count against quota |
+| `subject_id` | Bill the user even when an agent acted on their behalf |
+| `resource` (e.g., `tool:get_standings`, `token:access`) | What was used — tool or endpoint |
+| `action` | Verb of the use |
+| `attrs.duration_ms`, `attrs.tokens_in/out`, `attrs.upstream_cost_usd` | Cost shaping when the unit isn't "one call" |
+| `trace_id` | Reconciliation against OTel spans |
+
+So audit + a downstream metering job = strict, per-user, per-agent,
+per-tool, per-endpoint accounting. No parallel pipeline.
+
+**Caveat.** ADR-0018 allows audit emission to *drop under overflow*
+(non-blocking by design). Audit can be best-effort; metering cannot. When
+metering ships, the audit pipeline gains a second sink with at-least-once
+semantics — either a Postgres write on the request path or a persistent
+broker (Kafka, NATS JetStream). The schema stays the same; only the sink
+durability differs.
+
+### When to build it
+
+Same trigger discipline as the egress gateway. Wire the metering job when
+**any** of:
+
+- You charge anyone for tool calls
+- You need per-user or per-agent quotas (rate limit by *cost*, not just RPS)
+- You add paid LLM APIs and need cost allocation to the agent or user
+- You need usage analytics for product decisions ("which tools matter")
+
+### Lago fit
+
+[Lago](https://www.getlago.com) is the natural recipient: open source,
+self-hostable, event-ingestion-first, built for usage-based billing rather
+than seats. The data flow is mechanical:
+
+```mermaid
+graph LR
+    Services[auth-server<br/>MCP servers<br/>policy service] -->|ADR-0018 events| Audit[audit pipeline<br/>OTel log / broker]
+    Audit --> Meter[metering shim<br/>filter • transform]
+    Meter -->|Lago Event API| Lago[(Lago)]
+    Lago --> Inv[invoices<br/>plans • subscriptions]
+    Lago --> Quota[periodic quota<br/>reconciliation]
+```
+
+Mapping:
+
+| Lago primitive | Source in this portfolio |
+|---|---|
+| **Billable metric** (`count`, `sum`, `latest`, `unique_count`) | Aggregation over `event_type` + `attrs` |
+| **Customer** | `subject_id` (human-billed) or `agent_id` (agent-billed) |
+| **Event** | One-to-one with ADR-0018 events; the shim renames fields |
+| **Plan / subscription** | Per-RP, per-agent, or per-tenant commercial terms |
+| **Invoices / wallets** | Lago default features |
+
+What Lago **does not** cover — stays in the portfolio:
+
+- **Synchronous quota enforcement** at the request boundary lives in
+  `authorization-policy-service` backed by a Redis counter. Lago reconciles
+  totals on a schedule; it isn't a request-path quota oracle.
+- **Real-time cost gates** ("stop this agent at $50/day") sit in the egress
+  library, checked before the upstream call. Lago is the source of truth
+  after the fact.
+- **Per-call authorization decisions** stay with the policy engine.
+
+The same trigger that warrants the egress gateway typically warrants the
+metering pipeline — they share infrastructure (audit, identity claims,
+delegation chain). Reserved as a trigger-driven addition past P2.
 
 ## Target architecture: agent identity flow
 
@@ -255,6 +330,10 @@ in the [Ingress vs egress](#ingress-vs-egress) table fires:
 - **`jk-egress-gateway`** — promote the egress library into a dedicated
   service. Single chokepoint for outbound credentials, per-agent rate limits,
   DLP scanning, and outbound audit. Mirrors `jk-api-gateway` shape.
+- **Metering shim + Lago integration** — consume ADR-0018 events, transform
+  to Lago's Event API, drive billable metrics and invoices. Add the
+  at-least-once audit sink at the same time so accounting can't drop. See
+  [Usage accounting](#usage-accounting) for the shape.
 - **MCP hub / tool registry** — separate repo cataloging MCP endpoints + tool
   schemas + per-tool policies. Only needed once a third MCP server lands or
   agents start choosing destinations dynamically.
