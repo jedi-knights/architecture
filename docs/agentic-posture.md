@@ -116,7 +116,7 @@ graph TB
 | Policy enforcement on tool invocation | Missing | MCP servers + new shared lib |
 | Agent-aware audit events | **Implemented** — every paid surface emits ADR-0018 events; durable Postgres sink (ADR-0019) | `go-platform/audit`, all identity services |
 | LLM evaluation / agent test harness | Missing | MCP servers |
-| End-to-end tracing (LLM ↔ agent ↔ tool ↔ system) | Partial — every identity-platform service wires OTel (auth-server, identity-service, client-registry, authz-policy, login-ui, token-introspection); MCP server adapters still pending to close the trace chain | `go-platform` + all services |
+| End-to-end tracing (LLM ↔ agent ↔ tool ↔ system) | **Implemented** — every identity-platform service plus both MCP servers (jk-mcp-nwsl, jk-mcp-ecnl) emit traces; W3C `traceparent` propagates from auth-server through MCP to ESPN / AthleteOne | `go-platform` + all services |
 | Egress control plane (outbound credentials, cost, DLP) | Deferred — start as a library, promote when triggered | `go-platform` → future `jk-egress-gateway` |
 | Usage accounting / metering / billing | **Phase B (prerequisite, blocking further agentic work)** — self-hosted Lago + Stripe via the existing audit pipeline | identity-platform-go ADR-0019; [`jk-metering`](jk-metering.md); self-hosted Lago on Fly.io |
 | Context graph / vector store / RAG | Missing | out of portfolio scope |
