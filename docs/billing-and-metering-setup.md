@@ -6,7 +6,10 @@ for payment processing. Concrete sequence; no rationale (see
 [`agentic-posture.md`](agentic-posture.md#usage-accounting) and
 `identity-platform-go` ADR-0019 for that).
 
-> **Status:** sequence designed; execution begins when ADR-0019 merges.
+> **Status:** all the code in this sequence is now merged. Use
+> **[`operator-runbook.md`](operator-runbook.md)** for the concrete
+> commands to deploy and configure. This page is the design-time
+> walkthrough; the runbook is the execution checklist.
 
 ## End-to-end picture
 

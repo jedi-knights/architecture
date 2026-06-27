@@ -237,7 +237,9 @@ What Lago and Stripe **do not** cover — stays in the portfolio:
 - **Per-call authorization decisions** stay with the policy engine.
 
 See **[`billing-and-metering-setup.md`](billing-and-metering-setup.md)** for
-deployment, configuration, and first-SKU walkthroughs.
+the design-time walkthrough and
+**[`operator-runbook.md`](operator-runbook.md)** for the concrete
+deployment commands.
 
 ## Target architecture: agent identity flow
 

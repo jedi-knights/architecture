@@ -15,6 +15,7 @@ below has its own deep-dive page under [`docs/`](docs/); this page is the map.
 | [cross-cutting concerns](docs/cross-cutting.md) | Patterns shared across the portfolio | — | — |
 | [agentic posture](docs/agentic-posture.md) | Gap analysis + phased roadmap against WSO2's reference model | — | — |
 | [billing + metering setup](docs/billing-and-metering-setup.md) | Phase B prerequisite — self-hosted Lago + Stripe setup sequence | — | — |
+| [operator runbook](docs/operator-runbook.md) | Concrete deployment runbook — Stripe, Lago on Fly.io, metering services, first SKUs, smoke test | — | — |
 
 ## System map
 
