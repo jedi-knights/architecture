@@ -108,7 +108,7 @@ graph TB
 | Agent identity (distinct from human) | **Implemented** — `actor_type` + `agent_id` claims flow through every issued token (ADR-0015) | `identity-platform-go`, `go-platform/jwtutil` |
 | Scoped agent credentials | **Implemented** — OAuth scopes + ADR-0015 `actor_type` + per-call RFC 9396 `authorization_details` granted-details (ADR-0017) | `identity-platform-go`, `go-platform/jwtutil` |
 | Token Exchange (RFC 8693) for A2A delegation | **Implemented** — `urn:ietf:params:oauth:grant-type:token-exchange` grant on auth-server with `act` chain + depth cap + scope-subset enforcement (ADR-0016) | `identity-platform-go` |
-| Rich Authorization Requests (RFC 9396) | **Implemented** — `authorization_details` accepted on `/oauth/token`, embedded on the issued JWT, echoed on introspection, advertised in metadata; type registry: `mcp_tool` + `resource` (ADR-0017) | `identity-platform-go` |
+| Rich Authorization Requests (RFC 9396) | **Implemented** — `authorization_details` accepted on `/oauth/authorize` (PR #101) and `/oauth/token` (PR #99), persisted through the LoginChallenge and AuthorizationCode, embedded on the issued JWT, echoed on introspection, advertised in metadata; per-type schemas enforced for `mcp_tool` + `resource` (PR #100) — RFC 9396 §5 `invalid_authorization_details` returned for malformed entries (ADR-0017) | `identity-platform-go` |
 | Dynamic Client Registration (RFC 7591/7592) | **Implemented** — `POST /register` + `GET/PUT/DELETE /register/{id}` on client-registry-service (ADR-0013) | `identity-platform-go` |
 | Authorization Server Metadata (RFC 8414) | **Implemented** — `/.well-known/oauth-authorization-server` + `/.well-known/openid-configuration` on auth-server (ADR-0012) | `identity-platform-go` |
 | MCP tool authorization (per-tool, per-agent) | **Implemented** — RS256 bearer-token enforcement on streamable-http via `JWKSTokenVerifier`; per-tool annotations (`sensitivity`, `cost_class`, `rate_limit_class`) on every tool | `jk-mcp-nwsl`, `jk-mcp-ecnl` |
@@ -343,7 +343,7 @@ respective main branch.
 **Work items:**
 
 - ✅ ADR-0016 — Token Exchange (RFC 8693) with `act` chain — identity-platform-go PR #92
-- ✅ ADR-0017 — Rich Authorization Requests (RFC 9396) for per-call permissions — identity-platform-go PR #99
+- ✅ ADR-0017 — Rich Authorization Requests (RFC 9396) for per-call permissions — identity-platform-go PRs #99 (client_credentials grant), #100 (per-type validators), #101 (authorization_code grant)
 - ✅ `jk-mcp-nwsl` Streamable HTTP requires bearer token — jk-mcp-nwsl PR #23
 - ✅ `jk-mcp-ecnl` same change — jk-mcp-ecnl PR #7
 - ✅ Inbound authorization port consulted on every tool dispatch — jk-mcp-nwsl PR #24, jk-mcp-ecnl PR #8
@@ -360,11 +360,12 @@ the per-tool annotations on the request, and the full chain emits a
 single OTel trace from `/oauth/token` issuance through MCP dispatch to
 ESPN / AthleteOne.
 
-**Carve-outs for P2 / follow-up:** `/oauth/authorize` (authorization_code grant)
-RAR support — needs login-ui consent UI changes to render granted
-details. Per-type schema validators for `mcp_tool` / `resource` types —
-RFC 9396 leaves these to the deployment; this phase validates only the
-type discriminator.
+**Carve-outs — both closed as of 2026-06-28:**
+
+- ✅ Per-type schema validators for `mcp_tool` / `resource` types — identity-platform-go PR #100. `mcp_tool` requires `tool` and validates `actions` ⊆ {`read`,`invoke`} + positive `expires_in`; `resource` requires at least one of `locations`/`actions`/`datatypes`. Malformed entries surface as RFC 9396 §5 `invalid_authorization_details` at the auth-server boundary instead of being passed through opaquely.
+- ✅ `/oauth/authorize` (authorization_code grant) RAR support — identity-platform-go PR #101. `authorization_details` parsed at `/oauth/authorize`, persisted on the `LoginChallenge`, carried atomically onto the `AuthorizationCode`, embedded on the access token at `/oauth/token`. Today's auto-approve consent semantics preserved; login-ui needs no change.
+
+**Adjacent gap — login-ui consent screen.** Login-ui has sign-in only; there is no consent screen yet. When that screen ships (separate follow-up), it will render the persisted `authorization_details` for human approval and `Update` the LoginChallenge with the narrowed subset before `/internal/issue-code` Consumes it. No auth-server signature change required at that point — the field names and persistence shape are already in place.
 
 ### P2 — evaluation + registry ✅
 
@@ -420,7 +421,7 @@ Four new ADRs, implemented in order:
 | 0013 | RFC 7591 + RFC 7592 DCR | ✅ Shipped (PRs #84 + #85) |
 | 0015 | `actor_type` + `agent_id` claims | ✅ Shipped (P0) |
 | 0016 | RFC 8693 token exchange | ✅ Shipped (PR #92) |
-| 0017 | RFC 9396 rich authorization requests | ✅ Shipped (PR #99) |
+| 0017 | RFC 9396 rich authorization requests | ✅ Shipped (PRs #99 + #100 + #101) |
 | 0018 | Agent audit event schema | ✅ Shipped (every paid surface emits) |
 
 ### `go-platform`
