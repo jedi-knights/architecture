@@ -115,7 +115,7 @@ graph TB
 | Tool registry / MCP hub | Missing | new repo or via gateway |
 | Policy enforcement on tool invocation | **Implemented** — inbound `Authorizer` port consulted before every tool dispatch; `PolicyServiceAuthorizer` calls `authorization-policy-service` `/evaluate` with fail-closed default | `jk-mcp-nwsl`, `jk-mcp-ecnl` + `authorization-policy-service` |
 | Agent-aware audit events | **Implemented** — every paid surface emits ADR-0018 events; durable Postgres sink (ADR-0019) | `go-platform/audit`, all identity services |
-| LLM evaluation / agent test harness | **Partial** — scenario replay harness lands tool-dispatch + formatter regressions nightly on both MCP servers (`tests/evals/`, jk-mcp-nwsl PR #26, jk-mcp-ecnl PR #10); live-instance transport switch via `MCP_EVAL_REMOTE_URL` shipped (jk-mcp-nwsl PR #27, jk-mcp-ecnl PR #11) — scenarios opt in per-file via `live: true`. LLM-as-judge variant still ahead | `jk-mcp-nwsl`, `jk-mcp-ecnl` |
+| LLM evaluation / agent test harness | **Implemented** — scenario replay harness lands tool-dispatch + formatter regressions nightly on both MCP servers (`tests/evals/`, jk-mcp-nwsl PR #26, jk-mcp-ecnl PR #10); live-instance transport switch via `MCP_EVAL_REMOTE_URL` (jk-mcp-nwsl PR #27, jk-mcp-ecnl PR #11) opts scenarios in per-file via `live: true`; LLM-as-judge variant via `expected_judge` + Claude Haiku (jk-mcp-nwsl PR #28, jk-mcp-ecnl PR #12) grades semantic criteria PASS/FAIL when `ANTHROPIC_API_KEY` is set | `jk-mcp-nwsl`, `jk-mcp-ecnl` |
 | End-to-end tracing (LLM ↔ agent ↔ tool ↔ system) | **Implemented** — every identity-platform service plus both MCP servers (jk-mcp-nwsl, jk-mcp-ecnl) emit traces; W3C `traceparent` propagates from auth-server through MCP to ESPN / AthleteOne | `go-platform` + all services |
 | Egress control plane (outbound credentials, cost, DLP) | Deferred — start as a library, promote when triggered | `go-platform` → future `jk-egress-gateway` |
 | Usage accounting / metering / billing | **Phase B (prerequisite, blocking further agentic work)** — self-hosted Lago + Stripe via the existing audit pipeline | identity-platform-go ADR-0019; [`jk-metering`](jk-metering.md); self-hosted Lago on Fly.io |
@@ -366,9 +366,12 @@ details. Per-type schema validators for `mcp_tool` / `resource` types —
 RFC 9396 leaves these to the deployment; this phase validates only the
 type discriminator.
 
-### P2 — evaluation + registry
+### P2 — evaluation + registry ✅
 
 Agents are measured, registered centrally, and continuously evaluated.
+**Phase complete as of 2026-06-28** — every work item below in scope
+is merged; the MCP-hub decision is explicitly deferred to the
+trigger-driven beyond-P2 list.
 
 **Work items:**
 
@@ -376,12 +379,14 @@ Agents are measured, registered centrally, and continuously evaluated.
 - ✅ Scenario replay harness in each MCP server (`tests/evals/`) — jk-mcp-nwsl PR #26, jk-mcp-ecnl PR #10. YAML scenarios under `tests/evals/scenarios/` replay against an in-process MCP client with stubbed outbound ports, exercising the formatter and tool-dispatch chain hermetically.
 - ✅ Nightly drift workflow publishes results — `.github/workflows/evals.yml` on both repos (09:00 / 09:15 UTC offsets so the AthleteOne / ESPN upstreams don't get hit simultaneously once promoted to live-instance replay)
 - ✅ Live-instance replay via `MCP_EVAL_REMOTE_URL` — env-var-driven transport switch shipped on both MCP servers (jk-mcp-nwsl PR #27, jk-mcp-ecnl PR #11). Scenarios opt in via `live: true` so stub-only assertions don't drift into live runs; `MCP_EVAL_BEARER_TOKEN` forwarded when the deployment enforces auth.
-- LLM-as-judge variant of `expected_contains` — Claude-API-backed semantic match for tool outputs where substring assertion is too brittle
-- Decide: build MCP hub (separate repo) or defer — deferred until a third MCP server lands per the trigger gate below
-- This page closes: every gap-matrix row is "Present" or explicitly deferred
+- ✅ LLM-as-judge variant of `expected_contains` — `expected_judge` field on `Scenario` + Claude-backed grading shipped on both MCP servers (jk-mcp-nwsl PR #28, jk-mcp-ecnl PR #12). Default model `claude-haiku-4-5-20251001` (overridable via `MCP_EVAL_JUDGE_MODEL`); judge tests skip cleanly when `ANTHROPIC_API_KEY` is unset, so contributor PR runs without the key stay green.
+- Decide: build MCP hub (separate repo) or defer — **deferred** to the trigger-driven beyond-P2 list (no third MCP server yet, no dynamic destination requirement).
 
-**Acceptance:** drift report shows pass/fail per tool per prompt; gap matrix
-above has no "Missing" rows in scope; every "Partial" row has explicit rationale.
+**Acceptance — met:** drift report shows pass/fail per tool per
+prompt across two assertion modes (substring + semantic) and two
+transports (in-process + Streamable HTTP to a remote URL); the
+gap matrix above has no in-scope "Missing" rows; every "Partial"
+row carries an explicit rationale.
 
 ### Beyond P2 — trigger-driven additions
 
@@ -454,8 +459,10 @@ Both servers share a template; changes mirror each other:
   + tool-dispatch chain is exercised hermetically; nightly drift workflow runs
   on schedule. Setting `MCP_EVAL_REMOTE_URL` switches the transport to
   Streamable HTTP against the deployed Fly instance; scenarios marked
-  `live: true` participate. Future revision adds an LLM-as-judge variant of
-  `expected_contains`.
+  `live: true` participate. Scenarios with `expected_judge` criteria are
+  graded by Claude (Haiku 4.5 by default) PASS/FAIL when
+  `ANTHROPIC_API_KEY` is set — the semantic backstop for outputs whose
+  exact phrasing is too brittle to assert on with substrings.
 
 ## Reusing what's already there
 
