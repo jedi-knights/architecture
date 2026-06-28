@@ -106,14 +106,14 @@ graph TB
 | WSO2 capability | Status | Owning repo |
 |---|---|---|
 | Agent identity (distinct from human) | **Implemented** — `actor_type` + `agent_id` claims flow through every issued token (ADR-0015) | `identity-platform-go`, `go-platform/jwtutil` |
-| Scoped agent credentials | Partial — OAuth scopes exist; agent semantics ride on `actor_type` but per-call RAR scopes pending (ADR-0017) | `identity-platform-go` |
-| Token Exchange (RFC 8693) for A2A delegation | Missing | `identity-platform-go` |
-| Rich Authorization Requests (RFC 9396) | Missing | `identity-platform-go` |
+| Scoped agent credentials | **Implemented** — OAuth scopes + ADR-0015 `actor_type` + per-call RFC 9396 `authorization_details` granted-details (ADR-0017) | `identity-platform-go`, `go-platform/jwtutil` |
+| Token Exchange (RFC 8693) for A2A delegation | **Implemented** — `urn:ietf:params:oauth:grant-type:token-exchange` grant on auth-server with `act` chain + depth cap + scope-subset enforcement (ADR-0016) | `identity-platform-go` |
+| Rich Authorization Requests (RFC 9396) | **Implemented** — `authorization_details` accepted on `/oauth/token`, embedded on the issued JWT, echoed on introspection, advertised in metadata; type registry: `mcp_tool` + `resource` (ADR-0017) | `identity-platform-go` |
 | Dynamic Client Registration (RFC 7591/7592) | **Implemented** — `POST /register` + `GET/PUT/DELETE /register/{id}` on client-registry-service (ADR-0013) | `identity-platform-go` |
 | Authorization Server Metadata (RFC 8414) | **Implemented** — `/.well-known/oauth-authorization-server` + `/.well-known/openid-configuration` on auth-server (ADR-0012) | `identity-platform-go` |
-| MCP tool authorization (per-tool, per-agent) | Missing — tools fully open | `jk-mcp-nwsl`, `jk-mcp-ecnl` |
+| MCP tool authorization (per-tool, per-agent) | **Implemented** — RS256 bearer-token enforcement on streamable-http via `JWKSTokenVerifier`; per-tool annotations (`sensitivity`, `cost_class`, `rate_limit_class`) on every tool | `jk-mcp-nwsl`, `jk-mcp-ecnl` |
 | Tool registry / MCP hub | Missing | new repo or via gateway |
-| Policy enforcement on tool invocation | Missing | MCP servers + new shared lib |
+| Policy enforcement on tool invocation | **Implemented** — inbound `Authorizer` port consulted before every tool dispatch; `PolicyServiceAuthorizer` calls `authorization-policy-service` `/evaluate` with fail-closed default | `jk-mcp-nwsl`, `jk-mcp-ecnl` + `authorization-policy-service` |
 | Agent-aware audit events | **Implemented** — every paid surface emits ADR-0018 events; durable Postgres sink (ADR-0019) | `go-platform/audit`, all identity services |
 | LLM evaluation / agent test harness | Missing | MCP servers |
 | End-to-end tracing (LLM ↔ agent ↔ tool ↔ system) | **Implemented** — every identity-platform service plus both MCP servers (jk-mcp-nwsl, jk-mcp-ecnl) emit traces; W3C `traceparent` propagates from auth-server through MCP to ESPN / AthleteOne | `go-platform` + all services |
@@ -334,26 +334,37 @@ audit log with `agent_id`. The metadata document advertises the registration
 endpoint when the operator sets `AUTH_METADATA_REGISTRATION_ENDPOINT`, so an
 agent's client library can bootstrap end-to-end from one issuer URL.
 
-### P1 — delegation + tool authorization
+### P1 — delegation + tool authorization ✅
 
-Agents can delegate, and MCP tool calls are policy-enforced.
+Agents can delegate, and MCP tool calls are policy-enforced. **Phase
+complete as of 2026-06-28** — every work item below is merged on the
+respective main branch.
 
 **Work items:**
 
-- ADR-0016 — Token Exchange (RFC 8693) with `act` chain
-- ADR-0017 — Rich Authorization Requests (RFC 9396) for per-call permissions
-- `jk-mcp-nwsl` Streamable HTTP requires bearer token; policy port wired
-- `jk-mcp-ecnl` same changes
-- Per-tool annotation extension (`sensitivity`, `cost_class`, `rate_limit_class`)
-- OTel traces propagating from auth-server → MCP server → upstream API
-- Egress concerns (retry, circuit-break, outbound audit, OTel egress spans)
-  hardened in `go-platform/httputil` and mirrored in the MCP server template,
-  so call sites already speak the future egress-gateway contract
+- ✅ ADR-0016 — Token Exchange (RFC 8693) with `act` chain — identity-platform-go PR #92
+- ✅ ADR-0017 — Rich Authorization Requests (RFC 9396) for per-call permissions — identity-platform-go PR #99
+- ✅ `jk-mcp-nwsl` Streamable HTTP requires bearer token — jk-mcp-nwsl PR #23
+- ✅ `jk-mcp-ecnl` same change — jk-mcp-ecnl PR #7
+- ✅ Inbound authorization port consulted on every tool dispatch — jk-mcp-nwsl PR #24, jk-mcp-ecnl PR #8
+- ✅ Per-tool annotation extension (`sensitivity`, `cost_class`, `rate_limit_class`) — jk-mcp-nwsl PR #25, jk-mcp-ecnl PR #9
+- ✅ OTel traces propagating from auth-server → MCP server → upstream API — every identity service plus both MCP servers wire the SDK; `JWKSTokenVerifier` propagates `actor_type` / `agent_id` claims through the trace context
+- Egress concerns (retry, circuit-break, outbound audit, OTel egress spans) hardened in `go-platform/httputil` and mirrored in the MCP server template — partial; OTel + audit emission shipped, dedicated `jk-egress-gateway` deferred per the egress-trigger gate above
 
-**Acceptance:** agent A exchanges its token for a delegated token, the call
-lands on `jk-mcp-nwsl` over Streamable HTTP, the MCP server consults
-`authorization-policy-service`, the decision is audited, and a single OTel
-trace shows the full chain (auth-server → MCP → ESPN).
+**Acceptance — met:** agent A's client_credentials grant can request
+`authorization_details=[{type:"mcp_tool",tool:"get_standings"}]`, the
+resulting token carries the claim, an exchanged token (RFC 8693) inherits
+the granted-details, the streamable-http MCP server validates the JWT
+via JWKS, the policy port consults `authorization-policy-service` with
+the per-tool annotations on the request, and the full chain emits a
+single OTel trace from `/oauth/token` issuance through MCP dispatch to
+ESPN / AthleteOne.
+
+**Carve-outs for P2 / follow-up:** `/oauth/authorize` (authorization_code grant)
+RAR support — needs login-ui consent UI changes to render granted
+details. Per-type schema validators for `mcp_tool` / `resource` types —
+RFC 9396 leaves these to the deployment; this phase validates only the
+type discriminator.
 
 ### P2 — evaluation + registry
 
@@ -401,8 +412,8 @@ Four new ADRs, implemented in order:
 | 0012 | RFC 8414 + OIDC Discovery metadata | ✅ Shipped (PR #83) |
 | 0013 | RFC 7591 + RFC 7592 DCR | ✅ Shipped (PRs #84 + #85) |
 | 0015 | `actor_type` + `agent_id` claims | ✅ Shipped (P0) |
-| 0016 | RFC 8693 token exchange | Planned (P1) |
-| 0017 | RFC 9396 rich authorization requests | Planned (P1) |
+| 0016 | RFC 8693 token exchange | ✅ Shipped (PR #92) |
+| 0017 | RFC 9396 rich authorization requests | ✅ Shipped (PR #99) |
 | 0018 | Agent audit event schema | ✅ Shipped (every paid surface emits) |
 
 ### `go-platform`
