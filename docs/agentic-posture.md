@@ -115,7 +115,7 @@ graph TB
 | Tool registry / MCP hub | Missing | new repo or via gateway |
 | Policy enforcement on tool invocation | **Implemented** — inbound `Authorizer` port consulted before every tool dispatch; `PolicyServiceAuthorizer` calls `authorization-policy-service` `/evaluate` with fail-closed default | `jk-mcp-nwsl`, `jk-mcp-ecnl` + `authorization-policy-service` |
 | Agent-aware audit events | **Implemented** — every paid surface emits ADR-0018 events; durable Postgres sink (ADR-0019) | `go-platform/audit`, all identity services |
-| LLM evaluation / agent test harness | Missing | MCP servers |
+| LLM evaluation / agent test harness | **Partial** — scenario replay harness lands tool-dispatch + formatter regressions nightly on both MCP servers (`tests/evals/`, jk-mcp-nwsl PR #26, jk-mcp-ecnl PR #10); LLM-as-judge variant + live-instance replay still ahead | `jk-mcp-nwsl`, `jk-mcp-ecnl` |
 | End-to-end tracing (LLM ↔ agent ↔ tool ↔ system) | **Implemented** — every identity-platform service plus both MCP servers (jk-mcp-nwsl, jk-mcp-ecnl) emit traces; W3C `traceparent` propagates from auth-server through MCP to ESPN / AthleteOne | `go-platform` + all services |
 | Egress control plane (outbound credentials, cost, DLP) | Deferred — start as a library, promote when triggered | `go-platform` → future `jk-egress-gateway` |
 | Usage accounting / metering / billing | **Phase B (prerequisite, blocking further agentic work)** — self-hosted Lago + Stripe via the existing audit pipeline | identity-platform-go ADR-0019; [`jk-metering`](jk-metering.md); self-hosted Lago on Fly.io |
@@ -372,10 +372,12 @@ Agents are measured, registered centrally, and continuously evaluated.
 
 **Work items:**
 
-- ADR-0018 — agent audit event schema finalized; all services conform
-- LLM-as-judge eval harness in each MCP server (`tests/evals/`)
-- Nightly eval workflow publishes drift reports
-- Decide: build MCP hub (separate repo) or defer
+- ✅ ADR-0018 — agent audit event schema finalized; every paid surface emits
+- ✅ Scenario replay harness in each MCP server (`tests/evals/`) — jk-mcp-nwsl PR #26, jk-mcp-ecnl PR #10. YAML scenarios under `tests/evals/scenarios/` replay against an in-process MCP client with stubbed outbound ports, exercising the formatter and tool-dispatch chain hermetically.
+- ✅ Nightly drift workflow publishes results — `.github/workflows/evals.yml` on both repos (09:00 / 09:15 UTC offsets so the AthleteOne / ESPN upstreams don't get hit simultaneously once promoted to live-instance replay)
+- LLM-as-judge variant of `expected_contains` — Claude-API-backed semantic match for tool outputs where substring assertion is too brittle
+- Live-instance replay via `MCP_EVAL_REMOTE_URL` — same scenarios, real upstreams, catches wire-shape drift the in-process stubs can't see
+- Decide: build MCP hub (separate repo) or defer — deferred until a third MCP server lands per the trigger gate below
 - This page closes: every gap-matrix row is "Present" or explicitly deferred
 
 **Acceptance:** drift report shows pass/fail per tool per prompt; gap matrix
@@ -447,9 +449,11 @@ Both servers share a template; changes mirror each other:
 - **Extended tool annotations**: `sensitivity`, `cost_class`,
   `rate_limit_class` in addition to the current `readOnlyHint`.
 - **Per-call audit events** matching the `go-platform/audit` schema.
-- **LLM-as-judge eval harness** under `tests/evals/` — small set of reference
-  prompts + expected tool sequences; nightly job replays against the deployed
-  Fly instance and reports drift.
+- **Scenario replay harness** under `tests/evals/` — YAML scenarios replay
+  against an in-process MCP client with stubbed outbound ports so the formatter
+  + tool-dispatch chain is exercised hermetically; nightly drift workflow runs
+  on schedule. Future revision adds an LLM-as-judge variant of `expected_contains`
+  and live-instance replay via `MCP_EVAL_REMOTE_URL`.
 
 ## Reusing what's already there
 
