@@ -91,16 +91,53 @@ one Redis backing them.
 
 ### 2.1 Provision backing services
 
-```bash
-# Postgres for Lago (separate cluster from identity-platform's)
-fly postgres create --name lago-pg --region iad --vm-size shared-cpu-1x --volume-size 10
+Lago's canonical `docker-compose.yml` runs `getlago/postgres-partman`,
+not vanilla Postgres — the image bundles `pg_partman` for partitioning
+the `events` table. `fly postgres create` provisions vanilla Postgres
+and Lago's migrations expect the partman extension, so deploy the
+partman image as its own Fly app instead.
 
-# Redis for Lago (Upstash via Fly)
+```bash
+# Postgres for Lago — partman image, internal-only on Fly's 6PN.
+fly apps create lago-pg --org <your-org>
+fly volumes create lago_pg_data -a lago-pg --region iad --size 10
+
+POSTGRES_PASSWORD="$(openssl rand -hex 32)"
+fly secrets -a lago-pg set POSTGRES_PASSWORD="$POSTGRES_PASSWORD"
+
+cat > /tmp/lago-pg.fly.toml <<'TOML'
+app = "lago-pg"
+primary_region = "iad"
+[build]
+  image = "getlago/postgres-partman:15.0-alpine"
+[env]
+  POSTGRES_DB = "lago"
+  POSTGRES_USER = "lago"
+  PGDATA = "/data/postgres"
+[mounts]
+  source = "lago_pg_data"
+  destination = "/data/postgres"
+[[vm]]
+  cpu_kind = "shared"
+  cpus = 1
+  memory = "1gb"
+TOML
+fly deploy -a lago-pg -c /tmp/lago-pg.fly.toml --remote-only
+
+# Construct the DATABASE_URL for downstream apps. Fly's 6PN routes
+# any TCP port on <app>.internal automatically; no public listener.
+DATABASE_URL="postgres://lago:${POSTGRES_PASSWORD}@lago-pg.internal:5432/lago"
+
+# Redis for Lago (Upstash via Fly) — outputs a REDIS_URL.
 fly redis create --name lago-redis --region iad
 ```
 
-Capture the connection strings — `lago-pg` outputs a `DATABASE_URL`,
-`lago-redis` outputs a `REDIS_URL`.
+Trade-off: this Postgres is single-instance with a volume. There's no
+Fly-managed HA or automated backup. Schedule `pg_dump` to object
+storage as a follow-up, or accept the trade for the (small) billing
+volume Phase B starts at. Switching to managed Postgres later means
+re-deploying with a `pg_dump | psql` migration — straightforward but
+not zero-downtime.
 
 ### 2.2 Generate encryption keys
 
@@ -133,12 +170,13 @@ fly secrets -a lago-api set \
   LAGO_API_URL="https://api.billing.jediknights.dev" \
   LAGO_FRONT_URL="https://billing.jediknights.dev"
 
-# Minimal fly.toml — adjust the image tag to a pinned release.
+# Minimal fly.toml. Pin to an explicit Lago release — there is no
+# floating `v1` tag on Docker Hub; bump this when upgrading.
 cat > /tmp/lago-api.fly.toml <<'TOML'
 app = "lago-api"
 primary_region = "iad"
 [build]
-  image = "getlago/api:v1"
+  image = "getlago/api:v1.48.1"
 [http_service]
   internal_port = 3000
   force_https = true
@@ -169,7 +207,7 @@ cat > /tmp/lago-worker.fly.toml <<'TOML'
 app = "lago-worker"
 primary_region = "iad"
 [build]
-  image = "getlago/api:v1"
+  image = "getlago/api:v1.48.1"
 [processes]
   app = "./scripts/start.worker.sh"
 [[vm]]
@@ -192,7 +230,7 @@ cat > /tmp/lago-front.fly.toml <<'TOML'
 app = "lago-front"
 primary_region = "iad"
 [build]
-  image = "getlago/front:v1"
+  image = "getlago/front:v1.48.1"
 [http_service]
   internal_port = 80
   force_https = true
