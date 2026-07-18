@@ -16,6 +16,7 @@ below has its own deep-dive page under [`docs/`](docs/); this page is the map.
 | [agentic posture](docs/agentic-posture.md) | Gap analysis + phased roadmap against WSO2's reference model | — | — |
 | [billing + metering setup](docs/billing-and-metering-setup.md) | Phase B prerequisite — self-hosted Lago + Stripe setup sequence | — | — |
 | [operator runbook](docs/operator-runbook.md) | Concrete deployment runbook — Stripe, Lago on Fly.io, metering services, first SKUs, smoke test | — | — |
+| [Stripe setup](docs/stripe.md) | Stripe CLI, test/live discipline, restricted keys, webhooks, and CLI operations for Phase B | — | — |
 
 ## System map
 
