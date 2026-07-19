@@ -1,0 +1,13 @@
+# Per-session working notes — not committed
+TODO.md
+
+# Python cache from any tooling that runs against docs/
+.ruff_cache/
+__pycache__/
+*.pyc
+
+# Editor / OS
+.DS_Store
+.vscode/
+.idea/
+*.swp
