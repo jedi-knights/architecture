@@ -168,6 +168,16 @@ Explicit non-goals for v0.1.0 (record here so scope doesn't creep during impleme
 - No LSP mode. The tool is a batch analyzer; on-save inline diagnostics can come in v0.2.0 as a Neovim plugin wrapping the binary via `lint.nvim` or `nvim-lint`.
 - No custom-rule authoring API. All rules ship in-binary at v0.1.0; a plugin API for third-party rules is a v1.0 concern.
 
+## Shipped tools
+
+Ship dates and current versions per the "Update this doc when a tool ships" evolution rule below. When a shipped tool's ADR/scoring content is migrated to its own `docs/<tool>.md`, note the pointer here.
+
+| Tool | v0.1.0 | Distribution | Notes |
+|---|---|---|---|
+| [`neospec`](https://github.com/jedi-knights/neospec) | 2026-07-18 (v0.1.0); latest v0.4.0 (2026-07-18) | GoReleaser binaries; composite Action `jedi-knights/neospec@v0` | `exec` and `cover` subcommands landed same-day post-v0.1.0. Non-jedi-knights case-study PR deferred. |
+| [`plug-audit`](https://github.com/jedi-knights/plug-audit) | 2026-07-19 (v0.1.0) | `cargo-dist` binaries; Homebrew formula in `jedi-knights/tap`; composite Action `jedi-knights/plug-audit@v0` | Five v0.1.0 rules across `nvim/` and `deps/` categories. Adoption rounds (PA-8) deferred. |
+| [`plug-scaffold`](https://github.com/jedi-knights/plug-scaffold) | 2026-07-21 (v0.1.0) | GoReleaser binaries (linux/darwin × amd64/arm64, windows amd64); Docker (alpine) | Three styles (`omar`, `tj`, `prime`), all `plug-audit`-clean out of the box. Homebrew tap and composite Action deliberately deferred. |
+
 ## Portfolio evolution rules
 
 - **Score before scoping.** Any new tool idea gets scored against the three-question mental model and the 0–3 per-author matrix *before* implementation planning. Ideas below the 6-point cutoff go to the deferred list rather than the roadmap.
