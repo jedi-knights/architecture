@@ -77,7 +77,13 @@ Test mode unless noted.
 
 3. **Configure a webhook endpoint pointing at Lago** (you'll set the
    exact URL after Lago deploys in step 2; come back to this then):
-   - Endpoint URL: `https://api.billing.<your-domain>/webhooks/stripe`
+   - Endpoint URL: `https://<lago-api-host>/webhooks/stripe/<lago-org-id>`
+     — Lago's webhook route is org-scoped (`POST /webhooks/stripe/:organization_id`
+     in `rails routes`); a bare `/webhooks/stripe` returns 404. Get the
+     org id from Lago admin (Settings → Organization) or via
+     `fly ssh console -a jk-lago-api -C "bundle exec rails runner 'puts Organization.pluck(:name, :id)'"`.
+     Example with fly.dev defaults from §2:
+     `https://jk-lago-api.fly.dev/webhooks/stripe/<lago-org-id>`.
    - Events: `checkout.session.completed`,
      `invoice.payment_succeeded`, `invoice.payment_failed`,
      `customer.subscription.updated`,
@@ -284,6 +290,24 @@ fly deploy -a jk-lago-api -c /tmp/jk-lago-api.fly.toml --remote-only
 # postgres-partman on first boot from POSTGRES_DB; only the schema
 # needs bootstrapping here.
 fly ssh console -a jk-lago-api -C "bundle exec rails db:migrate"
+
+# Seed the four Lago roles (Admin, Finance, Manager, Accountant).
+# Without this, `UsersService#register_from_email` raises
+# ActiveRecord::RecordNotFound on `Role.admins.first!` inside the
+# signup transaction, and the entire signup rolls back — the front-end
+# form silently fails and the DB stays at 0 users / 0 orgs.
+#
+# Side effect: Lago's db/seeds.rb also seeds a demo organization named
+# "Hooli" (UUID 11111111-2222-3333-4444-555555555555) with sample
+# billable metrics, plans, add-ons, an invoice, and a credit note. It
+# does not interfere with real signup — you get a different org UUID —
+# but it is not cleanly scriptable to purge: the FK graph runs through
+# entitlement_entitlements → entitlement_entitlement_values and
+# several other associations that lack `dependent: :destroy` in
+# Lago v1.48. Options: (a) leave it — different UUID, harmless; or (b)
+# delete via the Lago admin UI (Settings → Organization → Delete)
+# while logged in as the Hooli admin, which runs the proper cascade.
+fly ssh console -a jk-lago-api -C "bundle exec rails db:seed"
 ```
 
 ### 2.4 Deploy jk-lago-worker (background jobs)
@@ -386,9 +410,9 @@ In Lago admin:
    step 1.3.
 3. Click Test connection.
 4. Go back to the Stripe dashboard webhook from step 1.3; the URL is
-   now `https://jk-lago-api.fly.dev/webhooks/stripe` (or your custom
-   domain if you attached one after §2.7). Confirm the endpoint shows
-   recent successful pings.
+   now `https://jk-lago-api.fly.dev/webhooks/stripe/<lago-org-id>`
+   (or your custom domain if you attached one after §2.7). Confirm the
+   endpoint shows recent successful pings.
 
 ## 4. Deploy the metering services
 

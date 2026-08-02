@@ -1,0 +1,98 @@
+# architecture — Claude Context
+
+This repo is docs-only. It holds the operator runbook, ADR indexes,
+and per-project trajectory pages. No shippable code; all changes are
+Markdown.
+
+## Where things live
+
+- `docs/operator-runbook.md` — the authoritative Phase B billing +
+  metering deploy playbook. Update in lockstep with any deploy-time
+  discovery. If the runbook and the live infra disagree, the runbook
+  is wrong.
+- `docs/agentic-posture.md` — usage accounting / MCP tool authz.
+- `docs/billing-and-metering-setup.md` — design-time sequence diagram.
+- `docs/jk-metering.md`, `docs/nvim-tool-portfolio.md`, and other
+  per-project trajectories.
+- `TODO.md` — gitignored active workstream tracker; always read on
+  session start.
+
+## Live infrastructure (as of 2026-08-02)
+
+Fly.io, `personal` org.
+
+| App | Purpose | URL |
+|---|---|---|
+| `jk-api-gateway` | Public ingress | `https://jk-api-gateway.fly.dev` |
+| `jk-auth-server` | OAuth server (internal) | `http://jk-auth-server.internal:8080` |
+| `jk-identity-service` | Identity backend (internal) | `http://jk-identity-service.internal:8081` |
+| `jk-metering-ingest` | HTTP event ingest → `audit_events` | `https://jk-metering-ingest.fly.dev` |
+| `lago-pg` | Postgres for Lago | `.internal:5432` |
+| `lago-redis` | Sidekiq queue | Upstash Pay-as-you-go |
+| `jk-lago-api` | Lago Rails API | `https://jk-lago-api.fly.dev` |
+| `jk-lago-worker` | Lago Sidekiq worker | (no HTTP) |
+| `jk-lago-front` | Lago admin UI | `https://jk-lago-front.fly.dev` |
+
+**Not yet deployed:** `jk-metering` (worker; blocked on `LAGO_API_KEY`
+mint), Stripe integration (§3; blocked on Stripe sandbox setup).
+
+## Lago Phase B signup gotcha (2026-08-02)
+
+Discovered while working through operator-runbook §2 for the first
+real deploy. Save future sessions the loop.
+
+**Symptom:** After `jk-lago-api` deploys cleanly and
+`rails db:migrate` succeeds, opening `https://jk-lago-front.fly.dev/sign-up`
+and submitting the form silently does nothing. The API logs show the
+GraphQL `registerUser` mutation returning `status: 404`, and the DB
+still has 0 users, 0 organizations after every attempt.
+
+**Root cause:** Lago's `UsersService#register_from_email` (in
+`app/services/users_service.rb`) calls `Role.admins.first!` inside the
+signup transaction. On a freshly-migrated DB the `roles` table is
+empty, `first!` raises `ActiveRecord::RecordNotFound` (surfaced as
+404), and the whole transaction rolls back — user, organization,
+membership all reverted. Segment tracking jobs get enqueued before the
+raise, which is why the API logs show `billing_entity_created` events
+that don't match any real DB row.
+
+**Fix:** `fly ssh console -a jk-lago-api -C "bundle exec rails db:seed"`
+after the migration. Seeds four roles (`Admin`, `Finance`, `Manager`,
+`Accountant`). Signup then works normally and redirects to the admin
+dashboard.
+
+**Side effect of the fix:** Lago's `db/seeds.rb` unconditionally seeds
+demo data — a placeholder org `11111111-2222-3333-4444-555555555555`
+with sample billable metrics, plans, add-ons, an invoice, and a credit
+note. This does not break real signup (different org UUID) but
+contaminates the DB. Purge after Phase B smoke passes, before wiring
+real Stripe:
+
+```ruby
+fly ssh console -a jk-lago-api -C "bundle exec rails runner \
+  'Organization.find(\"11111111-2222-3333-4444-555555555555\").destroy'"
+```
+
+**Runbook status:** the `db:seed` step + the Hooli-purge caveat are
+now inline in `docs/operator-runbook.md` §2.3.
+
+## Stripe webhook URL (2026-08-02)
+
+Lago's Stripe webhook route is **org-scoped**:
+`POST /webhooks/stripe/:organization_id`. A bare `/webhooks/stripe`
+returns 404 (verified via `rails routes | grep stripe`). Both §1.3
+and §3 of `docs/operator-runbook.md` are now updated to include the
+`<lago-org-id>` placeholder and how to fetch it. Do not paste a
+`/webhooks/stripe` URL into the Stripe dashboard — it fails silently
+until the first delivery attempt.
+
+## Conventions
+
+- Every runbook fix that came from live discovery is a **Should Fix**
+  or higher at review time — the runbook's job is to work end-to-end
+  on a fresh environment, so drift from live is a defect, not a
+  polish opportunity.
+- Follow the Angular Conventional Commits rule from the global
+  workflow. Docs changes use `docs(<scope>)`.
+- One `type(scope)` per PR; runbook edits stay separate from ADR
+  edits and from per-project trajectory doc edits.
