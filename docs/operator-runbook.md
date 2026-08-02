@@ -86,10 +86,23 @@ Test mode unless noted.
 
 ## 2. Deploy self-hosted Lago to Fly.io
 
-Lago ships three Docker images. Three Fly apps total, one Postgres and
-one Redis backing them.
+Lago ships three Docker images. Four Fly apps total (two Lago Rails
+apps + admin UI + Postgres), plus an Upstash Redis for the Sidekiq
+queue.
 
-### 2.1 Provision backing services
+**Naming.** `lago-api`, `lago-worker`, and `lago-front` are all
+globally-taken app names on Fly. Use the `jk-lago-*` prefix that
+matches the rest of the jedi-knights suite. `lago-pg` was still free
+at time of writing but is grabbed here without the prefix — rename to
+`jk-lago-pg` if it clashes at deploy time.
+
+**URLs.** These steps deploy against Fly's default `*.fly.dev`
+hostnames. If you own a domain and want branded URLs, add a `CNAME`
+after §2.7 and run `fly certs create` per app — then rotate the
+`LAGO_API_URL` / `LAGO_FRONT_URL` / `API_URL` secrets and redeploy.
+The Stripe webhook URL (§3) needs to be updated in lock-step.
+
+### 2.1a Provision Postgres
 
 Lago's canonical `docker-compose.yml` runs `getlago/postgres-partman`,
 not vanilla Postgres — the image bundles `pg_partman` for partitioning
@@ -97,39 +110,78 @@ the `events` table. `fly postgres create` provisions vanilla Postgres
 and Lago's migrations expect the partman extension, so deploy the
 partman image as its own Fly app instead.
 
+**Wrap the entrypoint.** Two Fly-side gotchas stack on this image:
+
+1. Fly mounts volumes as `root:root 0755` on every boot, overriding
+   any filesystem-level ownership you set. `postgres:alpine`'s
+   `docker-entrypoint.sh` `gosu`s to the `postgres` user before
+   creating `$PGDATA`, so it cannot `mkdir` a subdir of a root-owned
+   mount root — the machine restart-loops on `Permission denied`.
+2. `$PGDATA` cannot point at the mount root itself, because the ext4
+   filesystem leaves a `lost+found` there and `initdb` refuses to
+   initialize a non-empty directory.
+
+Fix both by (a) using a subdirectory for `$PGDATA` and (b) building a
+tiny wrapper image that chowns the mount before delegating to the
+stock entrypoint.
+
 ```bash
-# Postgres for Lago — partman image, internal-only on Fly's 6PN.
-fly apps create lago-pg --org <your-org>
-fly volumes create lago_pg_data -a lago-pg --region iad --size 10
+mkdir -p /tmp/lago-pg-build && cd /tmp/lago-pg-build
 
-POSTGRES_PASSWORD="$(openssl rand -hex 32)"
-fly secrets -a lago-pg set POSTGRES_PASSWORD="$POSTGRES_PASSWORD"
+cat > Dockerfile <<'DOCKERFILE'
+FROM getlago/postgres-partman:15.0-alpine
+USER root
+COPY entrypoint.sh /usr/local/bin/wrapped-entrypoint.sh
+RUN chmod +x /usr/local/bin/wrapped-entrypoint.sh
+ENTRYPOINT ["/usr/local/bin/wrapped-entrypoint.sh"]
+CMD ["postgres"]
+DOCKERFILE
 
-cat > /tmp/lago-pg.fly.toml <<'TOML'
+cat > entrypoint.sh <<'SH'
+#!/bin/sh
+set -e
+# Fly re-chowns the mount root to root:root on every boot; fix it here
+# before the stock entrypoint drops privileges to `postgres`.
+chown -R postgres:postgres /data/postgres
+chmod 0700 /data/postgres
+exec docker-entrypoint.sh "$@"
+SH
+
+cat > fly.toml <<'TOML'
 app = "lago-pg"
 primary_region = "iad"
+
 [build]
-  image = "getlago/postgres-partman:15.0-alpine"
+  dockerfile = "Dockerfile"
+
 [env]
   POSTGRES_DB = "lago"
   POSTGRES_USER = "lago"
-  PGDATA = "/data/postgres"
+  # PGDATA must be a subdir of the mount, not the mount root itself
+  # (initdb refuses non-empty dirs; the mount root has lost+found).
+  PGDATA = "/data/postgres/pgdata"
+
 [mounts]
   source = "lago_pg_data"
   destination = "/data/postgres"
+
 [[vm]]
   cpu_kind = "shared"
   cpus = 1
   memory = "1gb"
 TOML
-fly deploy -a lago-pg -c /tmp/lago-pg.fly.toml --remote-only
 
-# Construct the DATABASE_URL for downstream apps. Fly's 6PN routes
-# any TCP port on <app>.internal automatically; no public listener.
+fly apps create lago-pg --org <your-org>
+fly volumes create lago_pg_data -a lago-pg --region iad --size 10 --yes
+
+POSTGRES_PASSWORD="$(openssl rand -hex 32)"
+fly secrets -a lago-pg set POSTGRES_PASSWORD="$POSTGRES_PASSWORD"
+
+fly deploy -a lago-pg -c fly.toml --remote-only
+
+# Construct the DATABASE_URL for downstream apps. Fly's 6PN routes any
+# TCP port on <app>.internal automatically; no public listener needed.
 DATABASE_URL="postgres://lago:${POSTGRES_PASSWORD}@lago-pg.internal:5432/lago"
-
-# Redis for Lago (Upstash via Fly) — outputs a REDIS_URL.
-fly redis create --name lago-redis --region iad
 ```
 
 Trade-off: this Postgres is single-instance with a volume. There's no
@@ -138,6 +190,23 @@ storage as a follow-up, or accept the trade for the (small) billing
 volume Phase B starts at. Switching to managed Postgres later means
 re-deploying with a `pg_dump | psql` migration — straightforward but
 not zero-downtime.
+
+### 2.1b Provision Redis
+
+```bash
+fly redis create --name lago-redis --region iad --org <your-org> \
+  --plan "Pay-as-you-go" --disable-eviction --no-replicas
+# Interactive: answer `n` to the ProdPack ($200/mo) prompt.
+# This flag cannot be scripted around; the command needs a TTY.
+
+# Note the REDIS_URL from the output — save it to your vault.
+REDIS_URL="redis://default:<password>@fly-lago-redis.upstash.io:6379"
+```
+
+**Pricing watch.** Pay-as-you-go is $0.20 per 100K commands, and
+Sidekiq polls Redis constantly. On any real workload this beats the
+$10/mo Fixed 250MB plan within days. Migrate with `fly redis update
+--plan "Fixed 250MB"` after §2.6 smoke passes.
 
 ### 2.2 Generate encryption keys
 
@@ -151,14 +220,16 @@ ENCRYPTION_KEY_DERIVATION_SALT="$(openssl rand -hex 32)"
 SECRET_KEY_BASE="$(openssl rand -hex 64)"
 ```
 
-Save all five plus `STRIPE_API_KEY_TEST` to a vault — these never
-rotate casually, and a fresh key invalidates every issued JWT.
+Save all five plus `POSTGRES_PASSWORD`, `REDIS_URL`, `DATABASE_URL`,
+and `STRIPE_API_KEY_TEST` to a vault — Fly's secret store is
+write-only, so a lost value cannot be recovered without a key rotation
+that invalidates every issued JWT.
 
-### 2.3 Deploy lago-api
+### 2.3 Deploy jk-lago-api
 
 ```bash
-fly apps create lago-api --org <your-org>
-fly secrets -a lago-api set \
+fly apps create jk-lago-api --org <your-org>
+fly secrets -a jk-lago-api set \
   DATABASE_URL="$DATABASE_URL" \
   REDIS_URL="$REDIS_URL" \
   LAGO_RSA_PRIVATE_KEY="$LAGO_RSA_PRIVATE_KEY" \
@@ -166,90 +237,140 @@ fly secrets -a lago-api set \
   ENCRYPTION_DETERMINISTIC_KEY="$ENCRYPTION_DETERMINISTIC_KEY" \
   ENCRYPTION_KEY_DERIVATION_SALT="$ENCRYPTION_KEY_DERIVATION_SALT" \
   SECRET_KEY_BASE="$SECRET_KEY_BASE" \
-  LAGO_FROM_EMAIL="billing@jediknights.dev" \
-  LAGO_API_URL="https://api.billing.jediknights.dev" \
-  LAGO_FRONT_URL="https://billing.jediknights.dev"
+  LAGO_FROM_EMAIL="noreply@jk-lago-api.fly.dev" \
+  LAGO_API_URL="https://jk-lago-api.fly.dev" \
+  LAGO_FRONT_URL="https://jk-lago-front.fly.dev"
 
 # Minimal fly.toml. Pin to an explicit Lago release — there is no
 # floating `v1` tag on Docker Hub; bump this when upgrading.
-cat > /tmp/lago-api.fly.toml <<'TOML'
-app = "lago-api"
+cat > /tmp/jk-lago-api.fly.toml <<'TOML'
+app = "jk-lago-api"
 primary_region = "iad"
+
 [build]
   image = "getlago/api:v1.48.1"
+
+# RAILS_ENV=production is load-bearing: the image defaults to
+# `development`, which references the dotenv-rails and annotate_rb
+# gems that only exist in the development bundle. Rails will abort at
+# boot without this. LAGO_DISABLE_SEGMENT keeps analytics quiet.
+[env]
+  RAILS_ENV = "production"
+  RAILS_LOG_TO_STDOUT = "true"
+  LAGO_DISABLE_SEGMENT = "true"
+
 [http_service]
   internal_port = 3000
   force_https = true
   auto_stop_machines = false
   auto_start_machines = true
   min_machines_running = 1
+
+  [[http_service.checks]]
+    grace_period = "60s"     # Rails boot is slow; short grace churns
+    interval = "15s"
+    method = "GET"
+    timeout = "10s"
+    path = "/health"
+
 [[vm]]
   cpu_kind = "shared"
   cpus = 1
   memory = "1gb"
 TOML
-fly deploy -a lago-api -c /tmp/lago-api.fly.toml --remote-only
+fly deploy -a jk-lago-api -c /tmp/jk-lago-api.fly.toml --remote-only
 
-# Run Lago's DB migration once.
-fly ssh console -a lago-api -C "rails db:migrate"
+# Run Lago's DB migration once. The `lago` database is created by
+# postgres-partman on first boot from POSTGRES_DB; only the schema
+# needs bootstrapping here.
+fly ssh console -a jk-lago-api -C "bundle exec rails db:migrate"
 ```
 
-### 2.4 Deploy lago-worker (background jobs)
+### 2.4 Deploy jk-lago-worker (background jobs)
 
-Same image, different entrypoint:
+Same image and same secret set as `jk-lago-api`, with an overridden
+CMD to run the worker script:
 
 ```bash
-fly apps create lago-worker --org <your-org>
-fly secrets -a lago-worker import < <(fly secrets -a lago-api list -j | jq -r '.[].Name' | xargs -I{} echo {}=$(fly secrets -a lago-api show {} -j 2>/dev/null))
-# Simpler: replicate the same secrets you set on lago-api.
+fly apps create jk-lago-worker --org <your-org>
+# Re-run the same `fly secrets set` block from §2.3, targeting
+# jk-lago-worker. There is no cross-app secret copy on Fly.
 
-cat > /tmp/lago-worker.fly.toml <<'TOML'
-app = "lago-worker"
+cat > /tmp/jk-lago-worker.fly.toml <<'TOML'
+app = "jk-lago-worker"
 primary_region = "iad"
+
 [build]
   image = "getlago/api:v1.48.1"
+
+[env]
+  RAILS_ENV = "production"
+  RAILS_LOG_TO_STDOUT = "true"
+  LAGO_DISABLE_SEGMENT = "true"
+
+# Overrides the image's default CMD (which starts the Rails server).
+# The image has no ENTRYPOINT, so [processes] fully replaces CMD.
 [processes]
   app = "./scripts/start.worker.sh"
+
 [[vm]]
   cpu_kind = "shared"
   cpus = 1
   memory = "512mb"
+
+[[restart]]
+  policy = "always"
 TOML
-fly deploy -a lago-worker -c /tmp/lago-worker.fly.toml --remote-only
+fly deploy -a jk-lago-worker -c /tmp/jk-lago-worker.fly.toml --remote-only
 ```
 
-### 2.5 Deploy lago-front (admin UI)
+### 2.5 Deploy jk-lago-front (admin UI)
 
 ```bash
-fly apps create lago-front --org <your-org>
-fly secrets -a lago-front set \
-  API_URL="https://api.billing.jediknights.dev" \
+fly apps create jk-lago-front --org <your-org>
+fly secrets -a jk-lago-front set \
+  API_URL="https://jk-lago-api.fly.dev" \
   APP_ENV="production"
 
-cat > /tmp/lago-front.fly.toml <<'TOML'
-app = "lago-front"
+cat > /tmp/jk-lago-front.fly.toml <<'TOML'
+app = "jk-lago-front"
 primary_region = "iad"
+
 [build]
   image = "getlago/front:v1.48.1"
+
 [http_service]
   internal_port = 80
   force_https = true
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [[http_service.checks]]
+    grace_period = "30s"
+    interval = "15s"
+    method = "GET"
+    timeout = "5s"
+    path = "/"
+
 [[vm]]
   cpu_kind = "shared"
   cpus = 1
   memory = "256mb"
 TOML
-fly deploy -a lago-front -c /tmp/lago-front.fly.toml --remote-only
+fly deploy -a jk-lago-front -c /tmp/jk-lago-front.fly.toml --remote-only
 ```
 
 ### 2.6 First-run smoke
 
 ```bash
-curl -fsS https://api.billing.jediknights.dev/health
-# {"status":"ok"}
+curl -fsS https://jk-lago-api.fly.dev/health
+# {"version":"v1.48.1","github_url":"...","message":"Success"}
 ```
 
-Open `https://billing.jediknights.dev`, create an admin user, log in.
+Open `https://jk-lago-front.fly.dev` and sign up **immediately** — the
+first account to register becomes the admin. The URL is publicly
+reachable; treat that time window as sensitive.
 
 ### 2.7 Mint a Lago API key
 
@@ -265,8 +386,9 @@ In Lago admin:
    step 1.3.
 3. Click Test connection.
 4. Go back to the Stripe dashboard webhook from step 1.3; the URL is
-   now `https://api.billing.jediknights.dev/webhooks/stripe`. Confirm
-   the endpoint shows recent successful pings.
+   now `https://jk-lago-api.fly.dev/webhooks/stripe` (or your custom
+   domain if you attached one after §2.7). Confirm the endpoint shows
+   recent successful pings.
 
 ## 4. Deploy the metering services
 
@@ -281,7 +403,7 @@ cd /path/to/jk-metering
 fly apps create jk-metering --org <your-org>
 fly secrets -a jk-metering set \
   METERING_AUDIT_DSN="<identity audit_events DSN>" \
-  METERING_LAGO_BASE_URL="https://api.billing.jediknights.dev" \
+  METERING_LAGO_BASE_URL="http://jk-lago-api.internal:3000" \
   METERING_LAGO_API_KEY="$LAGO_API_KEY"
 fly deploy -a jk-metering --remote-only -c fly.toml
 ```
@@ -326,7 +448,7 @@ Route `https://auth.jediknights.dev/metering/events` →
 
 ```bash
 fly secrets -a login-ui set \
-  LOGIN_UI_BILLING_LAGO_URL="https://api.billing.jediknights.dev" \
+  LOGIN_UI_BILLING_LAGO_URL="http://jk-lago-api.internal:3000" \
   LOGIN_UI_BILLING_LAGO_API_KEY="$LAGO_API_KEY" \
   LOGIN_UI_BILLING_SUCCESS_URL="https://auth.jediknights.dev/billing/portal?subject={CHECKOUT_SESSION_SUBJECT}" \
   LOGIN_UI_BILLING_CANCEL_URL="https://auth.jediknights.dev/billing/plans?subject={CHECKOUT_SESSION_SUBJECT}"
@@ -394,7 +516,7 @@ psql "$AUDIT_DSN" -c "SELECT event_id, event_type, actor_type, resource_path
 
 # 10. Within METERING_METERING_POLL_INTERVAL_SECONDS (5s default), the
 #     row's consumed_at goes non-null. Confirm a matching event in Lago:
-open https://billing.jediknights.dev  # Events → filter by subject
+open https://jk-lago-front.fly.dev  # Events → filter by subject
 ```
 
 Then advance Lago's clock (admin → Subscriptions → … → Issue invoice
@@ -407,7 +529,7 @@ After the test-mode smoke passes:
 
 1. Generate a **live** Stripe restricted API key + webhook signing
    secret.
-2. `fly secrets -a lago-api set STRIPE_API_KEY=$STRIPE_API_KEY_LIVE
+2. `fly secrets -a jk-lago-api set STRIPE_API_KEY=$STRIPE_API_KEY_LIVE
    STRIPE_WEBHOOK_SECRET=$STRIPE_WEBHOOK_SECRET_LIVE` and redeploy.
 3. Update the Lago Stripe integration to use the live key.
 4. Stripe will require activation (business details, bank account) —
@@ -434,8 +556,8 @@ After the test-mode smoke passes:
   Lago — today it does not), `login-ui`), then revoke the old one in
   Lago admin.
 - **Stripe API key.** Generate the new restricted key, update on Lago
-  (`fly secrets -a lago-api set`), redeploy `lago-api`, revoke the
-  old key.
+  (`fly secrets -a jk-lago-api set`), redeploy `jk-lago-api`, revoke
+  the old key.
 - **Stripe webhook secret.** Roll the new one into Lago via the same
   Settings → Integrations form; old webhook calls fail-fast.
 
@@ -447,7 +569,7 @@ After the test-mode smoke passes:
   via `SKIP LOCKED` on the partial index (`audit_events_unconsumed`).
 - **`jk-metering-ingest`.** Stateless; scale on request rate. Behind
   the gateway, the rate limit is the natural ceiling.
-- **Lago.** `lago-api` scales horizontally; `lago-worker` is
+- **Lago.** `jk-lago-api` scales horizontally; `jk-lago-worker` is
   per-process — add more instances when the Sidekiq queue grows.
 
 ## 10. Troubleshooting
@@ -456,12 +578,12 @@ After the test-mode smoke passes:
 |---|---|---|
 | `jk-metering` logs "no billing identity" | Event missing `subject_id`, `client_id`, and `actor_id` | Inspect the row — emitter bug |
 | Lago events never arrive | Worker can't reach Lago | `fly logs -a jk-metering` for `POST /api/v1/events` errors |
-| Lago events arrive but stay "pending" | Lago worker is down | `fly status -a lago-worker` |
+| Lago events arrive but stay "pending" | Lago worker is down | `fly status -a jk-lago-worker` |
 | Checkout works, no invoice | Stripe webhook misconfigured | Stripe dashboard → Webhooks → recent attempts |
 | Invoice raised, no charge | Stripe Tax not configured for region | Stripe Tax → Registrations |
 | `consumed_at` never set after Lago push | DB connection lost mid-tick | `jk-metering` will retry; verify Lago dedupes on retry |
 | `/billing/plans` shows empty | Lago has no active plans, or `LOGIN_UI_BILLING_LAGO_API_KEY` is unset | `curl -H "Authorization: Bearer $LAGO_API_KEY" .../api/v1/plans` |
-| `/billing/checkout` returns 500 | Lago can't reach Stripe | `fly logs -a lago-api` |
+| `/billing/checkout` returns 500 | Lago can't reach Stripe | `fly logs -a jk-lago-api` |
 
 ## Done state
 
