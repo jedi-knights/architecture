@@ -296,10 +296,28 @@ identity-platform-go DB or its own dedicated Postgres.
 fly apps create jk-metering-ingest --org <your-org>
 fly secrets -a jk-metering-ingest set \
   METERING_AUDIT_DSN="<identity audit_events DSN>" \
-  METERING_INGEST_JWKS_URL="https://auth.jediknights.dev/.well-known/jwks.json" \
-  METERING_INGEST_EXPECTED_ISSUER="https://auth.jediknights.dev"
+  METERING_INGEST_JWKS_URL="http://jk-auth-server.internal:8080/.well-known/jwks.json" \
+  METERING_INGEST_EXPECTED_ISSUER="identity-platform"
 fly deploy -a jk-metering-ingest --remote-only -c fly.ingest.toml
 ```
+
+**On the JWKS URL.** Internal over Fly's 6PN (HTTP, port `8080` per
+`fly.auth-server.toml`) is preferred: no public-routing dependency, no
+TLS termination in the path, and the JWKS document is cached in the
+ingest for an hour so latency is irrelevant. Use the public
+`https://auth.jediknights.dev/.well-known/jwks.json` only if you have
+a specific reason to bypass 6PN.
+
+**On the expected issuer.** The value must match exactly what
+`jk-auth-server` mints into the `iss` claim of access tokens, which
+comes from `AUTH_JWT_ISSUER` on that service. The deployed setting is
+the bare string `identity-platform` (see `fly.auth-server.toml`, and
+where the value flows in through `container.go` →
+`NewRS256TokenGenerator(keys, cfg.JWT.Issuer, cfg.JWT.Audience)`). If
+the platform later switches to an OIDC-compliant URL issuer, update
+both `AUTH_JWT_ISSUER` on the auth-server *and* this value in
+lock-step — a mismatch fails every token verification silently at the
+ingest.
 
 Route `https://auth.jediknights.dev/metering/events` →
 `jk-metering-ingest:8090` on the `jk-api-gateway`.
