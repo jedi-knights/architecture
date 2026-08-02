@@ -33,8 +33,8 @@ Fly.io, `personal` org.
 | `jk-lago-worker` | Lago Sidekiq worker | (no HTTP) |
 | `jk-lago-front` | Lago admin UI | `https://jk-lago-front.fly.dev` |
 
-**Not yet deployed:** `jk-metering` (worker; blocked on `LAGO_API_KEY`
-mint), Stripe integration (§3; blocked on Stripe sandbox setup).
+**Not yet deployed:** Stripe integration (§3; blocked on Stripe
+sandbox `whsec_...` secret).
 
 ## Lago Phase B signup gotcha (2026-08-02)
 
@@ -62,19 +62,33 @@ after the migration. Seeds four roles (`Admin`, `Finance`, `Manager`,
 dashboard.
 
 **Side effect of the fix:** Lago's `db/seeds.rb` unconditionally seeds
-demo data — a placeholder org `11111111-2222-3333-4444-555555555555`
-with sample billable metrics, plans, add-ons, an invoice, and a credit
-note. This does not break real signup (different org UUID) but
-contaminates the DB. Purge after Phase B smoke passes, before wiring
-real Stripe:
+demo data — a placeholder org named "Hooli"
+(`11111111-2222-3333-4444-555555555555`) with sample billable metrics,
+plans, add-ons, an invoice, and a credit note.
 
-```ruby
-fly ssh console -a jk-lago-api -C "bundle exec rails runner \
-  'Organization.find(\"11111111-2222-3333-4444-555555555555\").destroy'"
-```
+**Hooli is permanent in v1.48 — do not try to purge it.** Verified
+2026-08-02 across every layer:
 
-**Runbook status:** the `db:seed` step + the Hooli-purge caveat are
-now inline in `docs/operator-runbook.md` §2.3.
+- No `DELETE` route on `/api/v1/organizations` or `/admin/organizations`
+  (`rails routes | grep organization`).
+- No `Organizations::DestroyService` — the services directory ships
+  `create_service.rb` and `update_service.rb` only.
+- No admin UI path (Settings → Organization has no delete button).
+- Direct SQL cascade is blocked by `entitlement_entitlements` →
+  `entitlement_entitlement_values` and other FK relationships that
+  lack `dependent: :destroy` on the Rails side and lack `ON DELETE
+  CASCADE` on the DB side.
+- `SET session_replication_role = 'replica'` (to bypass FK
+  enforcement) needs `SUPERUSER`, which Fly's managed Postgres does
+  not grant on user apps.
+
+Hooli is harmless — real signups get a different UUID and Hooli never
+appears in any user's org switcher unless a `Membership` is explicitly
+created for them. Wait for a future Lago version to add org destroy;
+until then, ignore.
+
+**Runbook status:** the `db:seed` step + the corrected Hooli caveat
+are inline in `docs/operator-runbook.md` §2.3.
 
 ## Stripe webhook URL (2026-08-02)
 

@@ -299,14 +299,19 @@ fly ssh console -a jk-lago-api -C "bundle exec rails db:migrate"
 #
 # Side effect: Lago's db/seeds.rb also seeds a demo organization named
 # "Hooli" (UUID 11111111-2222-3333-4444-555555555555) with sample
-# billable metrics, plans, add-ons, an invoice, and a credit note. It
-# does not interfere with real signup — you get a different org UUID —
-# but it is not cleanly scriptable to purge: the FK graph runs through
-# entitlement_entitlements → entitlement_entitlement_values and
-# several other associations that lack `dependent: :destroy` in
-# Lago v1.48. Options: (a) leave it — different UUID, harmless; or (b)
-# delete via the Lago admin UI (Settings → Organization → Delete)
-# while logged in as the Hooli admin, which runs the proper cascade.
+# billable metrics, plans, add-ons, an invoice, and a credit note.
+# **Hooli is permanent in v1.48 — there is no supported way to delete
+# it.** Verified: no DELETE route on `/api/v1/organizations` or
+# `/admin/organizations`, no `Organizations::DestroyService` (the
+# services directory only ships `create_service.rb` and
+# `update_service.rb`), no admin UI path. Direct SQL cascade is
+# blocked by `entitlement_entitlements` → `entitlement_entitlement_values`
+# and other FK relationships that lack `dependent: :destroy`;
+# bypassing with `SET session_replication_role = 'replica'` needs
+# SUPERUSER which Fly's managed Postgres does not grant. Accept it as
+# harmless clutter — real signups get a different UUID and Hooli
+# never appears in any user's org switcher unless they are explicitly
+# added as a member.
 fly ssh console -a jk-lago-api -C "bundle exec rails db:seed"
 ```
 
