@@ -100,6 +100,18 @@ and §3 of `docs/operator-runbook.md` are now updated to include the
 `/webhooks/stripe` URL into the Stripe dashboard — it fails silently
 until the first delivery attempt.
 
+**Live Lago org IDs on `jk-lago-api` (verified 2026-08-29):**
+
+| Name | ID | Use? |
+|---|---|---|
+| Hooli | `11111111-2222-3333-4444-555555555555` | ❌ seed demo org — ignore |
+| Jedi Knights | `605bdae2-b087-4a32-b797-ca18c7be4aa3` | ✅ real org — wire Stripe against this |
+
+Stripe webhook URL for the Jedi Knights org:
+`https://jk-lago-api.fly.dev/webhooks/stripe/605bdae2-b087-4a32-b797-ca18c7be4aa3`.
+Refetch after any org create/delete via
+`fly ssh console -a jk-lago-api -C "bundle exec rails runner 'puts Organization.pluck(:name, :id)'"`.
+
 ## Conventions
 
 - Every runbook fix that came from live discovery is a **Should Fix**
