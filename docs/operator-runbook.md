@@ -614,6 +614,41 @@ After the test-mode smoke passes:
 | `/billing/plans` shows empty | Lago has no active plans, or `LOGIN_UI_BILLING_LAGO_API_KEY` is unset | `curl -H "Authorization: Bearer $LAGO_API_KEY" .../api/v1/plans` |
 | `/billing/checkout` returns 500 | Lago can't reach Stripe | `fly logs -a jk-lago-api` |
 
+### 10.1 verify-metering failure modes
+
+The E2E probe script `scripts/verify-metering.sh` (in
+[`jedi-knights/jk-metering`](https://github.com/jedi-knights/jk-metering))
+emits one specific message per failure, prefixed `verify-metering:`.
+Use this table to interpret runs from the daily
+`.github/workflows/verify-metering.yml` schedule or from a manual
+`workflow_dispatch` / local invocation.
+
+Exit codes: `0` verified, `1` pipeline failure, `2` configuration
+error (missing env, missing binary).
+
+| Script message | Step | Likely cause | First check |
+|---|---|---|---|
+| `missing required env var: X` (exit 2) | preflight | Repo secret/var not configured | GitHub → repo Settings → Secrets & variables; workflow yaml lists all names |
+| `missing required binary: X` (exit 2) | preflight | Ubuntu runner image regressed on preinstalled tools | Add `apt-get install` step for the missing tool |
+| `ingest returned 401, expected 202` | 1/4 | Token invalid/expired, or ingest's JWKS URL / issuer misconfigured | `fly logs -a jk-metering-ingest` — look for the boot config log line; verify `METERING_TEST_TOKEN` decodes with an unexpired `exp` |
+| `ingest returned 403, expected 202` | 1/4 | Token lacks `metering:emit` or `metering:emit:verify` scope | Decode the token's `scope` claim; re-mint with the missing scope |
+| `ingest returned 400, expected 202` | 1/4 | Ingest schema drift — `Request` struct rejected the probe body | `jk-metering` `internal/ingest/handler.go` `Validate()` for the new required field; update script payload in lockstep |
+| `ingest returned 5xx, expected 202` | 1/4 | Ingest crashed, or the durable audit sink is unreachable | `fly logs -a jk-metering-ingest` for the panic; `fly logs` on the audit Postgres app for connection saturation |
+| `curl: (7) Failed to connect` / no HTTP code | 1/4 | Gateway or ingest down; ingress routing broken | `curl -I https://jk-api-gateway.fly.dev/health`; `fly status -a jk-api-gateway`; api-gateway route table for `/metering/events` |
+| `no audit_events row found for probe_id=... after Ns` | 2/4 | `METERING_AUDIT_DSN` points at a different DB than ingest writes to, or `METERING_AUDIT_TABLE` differs, or ingest returned 202 without writing (bug — should be 500) | Compare ingest's `METERING_AUDIT_DSN` on Fly vs the workflow secret; verify with `psql "$METERING_AUDIT_DSN" -c "SELECT count(*) FROM audit_events WHERE created_at > now() - interval '5 min'"` |
+| `worker did not set consumed_at within Ns` | 3/4 | Worker stopped, worker lagging, or Lago push failing repeatedly | `fly status -a jk-metering`; grep worker logs for `"msg":"metering heartbeat"` — look at `lag_seconds` and `failed_total`; if `failed_total` climbing, grep for Lago POST errors |
+| `Lago returned 401 querying transaction_id=...` | 4/4 | `LAGO_API_KEY` wrong/rotated | Refetch from Lago admin → Settings → API keys; update `LAGO_API_KEY` secret |
+| `Lago returned 404 querying transaction_id=...` | 4/4 | Wrong `LAGO_BASE_URL`, or `/api/v1/events` route missing (Lago downgrade?) | `curl -H "Authorization: Bearer $LAGO_API_KEY" "$LAGO_BASE_URL/api/v1/organizations"` — should return 200 with the org list |
+| `Lago returned 5xx querying ...` | 4/4 | Lago API down or overloaded | `fly status -a jk-lago-api`; `fly logs -a jk-lago-api` for the 5xx |
+| `expected 1 Lago event for transaction_id=..., got 0` | 4/4 | Worker marked `consumed_at` but Lago rejected the event (validation) OR the workflow points at a different Lago instance than the worker pushes to | `fly logs -a jk-metering` for the specific ULID — the Lago client logs the response on non-2xx; compare `METERING_LAGO_BASE_URL` on the worker vs `LAGO_BASE_URL` in the workflow |
+| `expected 1 Lago event ..., got N > 1` | 4/4 | Lago dedupe on `transaction_id` failed | File upstream — Lago bug. Should be impossible under the ADR-0019 contract |
+
+**Failure escalation.** A scheduled-run failure files a GitHub issue
+tagged `ops`/`metering` in `jedi-knights/jk-metering` with a link to
+the workflow run. Manual `workflow_dispatch` failures do *not* file an
+issue (avoids noise while debugging). A future revision can add a
+Slack/PagerDuty step once a webhook is provisioned.
+
 ## Done state
 
 The runbook is complete when:
