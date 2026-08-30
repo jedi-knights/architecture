@@ -17,7 +17,7 @@ Markdown.
 - `TODO.md` — gitignored active workstream tracker; always read on
   session start.
 
-## Live infrastructure (as of 2026-08-02)
+## Live infrastructure (as of 2026-08-30)
 
 Fly.io, `personal` org.
 
@@ -26,12 +26,34 @@ Fly.io, `personal` org.
 | `jk-api-gateway` | Public ingress | `https://jk-api-gateway.fly.dev` |
 | `jk-auth-server` | OAuth server (internal) | `http://jk-auth-server.internal:8080` |
 | `jk-identity-service` | Identity backend (internal) | `http://jk-identity-service.internal:8081` |
+| `jk-authorization-policy-service` | Policy decisions (internal) | `.internal` |
+| `jk-client-registry-service` | OAuth client registry (internal) | `.internal` |
+| `jk-token-introspection-service` | RFC 7662 introspection (internal) | `.internal` |
+| `jk-metering` | Worker: drains `audit_events` → Lago | (no HTTP) |
 | `jk-metering-ingest` | HTTP event ingest → `audit_events` | `https://jk-metering-ingest.fly.dev` |
 | `lago-pg` | Postgres for Lago | `.internal:5432` |
 | `lago-redis` | Sidekiq queue | Upstash Pay-as-you-go |
 | `jk-lago-api` | Lago Rails API | `https://jk-lago-api.fly.dev` |
 | `jk-lago-worker` | Lago Sidekiq worker | (no HTTP) |
 | `jk-lago-front` | Lago admin UI | `https://jk-lago-front.fly.dev` |
+
+**Fly Managed Postgres clusters** (do *not* appear in `fly apps list` —
+query via `fly mpg list -o personal`):
+
+| Cluster | ID | Purpose | Attached apps |
+|---|---|---|---|
+| `jk-identity-pg` | `vmkq60998kp035ln` | `audit_events` + all identity-service state (region `iad`, plan `basic`) | `jk-identity-service`, `jk-client-registry-service`, `jk-authorization-policy-service`, `jk-example-resource-service` |
+
+`jk-metering` and `jk-metering-ingest` also read/write `audit_events`
+on `jk-identity-pg`, but they got the DSN copy-pasted rather than
+attached via `fly mpg attach` (secrets digest confirms same DSN as
+`jk-identity-service`'s `IDENTITY_DATABASE_URL`). Not visible in the
+MPG cluster's attached-apps list — but they hit the same database.
+
+To tunnel to `jk-identity-pg` from a laptop or CI runner: `fly mpg
+proxy vmkq60998kp035ln -p 5432` (default port is `16380`; override to
+`5432` if downstream code assumes the standard PG port). Plain
+`flyctl proxy -a` does **not** work against MPG.
 
 **Not yet deployed:** Stripe integration (§3; blocked on Stripe
 sandbox `whsec_...` secret).
