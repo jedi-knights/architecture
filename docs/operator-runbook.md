@@ -653,6 +653,85 @@ or binary on the runner).
 - Each run uses a fresh `probe_id` (`probe-<unix-ts>-<rand4>`), so
   reruns never collide with prior probes.
 
+## 11. OIDC endpoints and login-ui
+
+The identity-platform ships three OIDC-provider surfaces that OAuth clients (Touchline, future Scout Sleuth, etc.) consume through `jk-api-gateway.fly.dev`:
+
+| Endpoint | Served by | Gateway route |
+|---|---|---|
+| `GET /.well-known/openid-configuration` | `jk-auth-server` | `/.well-known` → `jk-auth-server.internal:8080` |
+| `GET /.well-known/jwks.json` | `jk-auth-server` | same prefix as above |
+| `GET /userinfo` | `jk-auth-server` | `/userinfo` → `jk-auth-server.internal:8080` |
+| `GET /oauth/authorize` → 302 to login-ui | `jk-auth-server` | `/oauth` → `jk-auth-server.internal:8080` |
+| `POST /oauth/token` | `jk-auth-server` | same as above |
+
+The sign-in UI (`jk-login-ui`) is **not** behind the gateway. `/oauth/authorize` 302s the user-agent directly to `https://jk-login-ui.fly.dev/sign-in?login_challenge=<id>` per ADR-0011. Only server-to-server calls (`login-ui → jk-auth-server.internal:8080/internal/issue-code`) stay on the private 6PN network.
+
+### Deploy `jk-login-ui` for the first time
+
+1. **Create the app:**
+   ```bash
+   fly apps create jk-login-ui
+   ```
+2. **Generate the shared service token** that lets login-ui call `jk-auth-server`'s `/internal/issue-code`:
+   ```bash
+   token=$(openssl rand -hex 32)
+   ```
+3. **Set the token as a secret on both apps:**
+   ```bash
+   fly secrets set LOGIN_UI_AUTH_SERVER_SERVICE_TOKEN="$token" -a jk-login-ui
+   fly secrets set AUTH_LOGIN_UI_URL=https://jk-login-ui.fly.dev \
+                   AUTH_LOGIN_UI_SERVICE_TOKEN="$token" \
+                   -a jk-auth-server
+   ```
+   The two tokens must match exactly; the hex form is stored opaquely in Fly secrets.
+4. **Deploy** by merging the identity-platform-go PR that adds `fly.login-ui.toml` and the deploy-matrix entry. The next push to `main` runs `fly deploy -c fly.login-ui.toml --remote-only` via `.github/workflows/deploy.yml`.
+5. **Scale to the ADR-0029 N ≥ 2 floor:**
+   ```bash
+   fly scale count 2 -a jk-login-ui
+   ```
+   `min_machines_running = 2` in the toml holds the floor; `fly scale count` sets the ceiling.
+
+### Smoke test from a laptop
+
+```bash
+# OIDC metadata — expect valid JSON with issuer, authorization_endpoint,
+# token_endpoint, userinfo_endpoint, jwks_uri all set.
+curl -s https://jk-api-gateway.fly.dev/.well-known/openid-configuration | jq
+
+# JWKS — expect an RS256 key set.
+curl -s https://jk-api-gateway.fly.dev/.well-known/jwks.json | jq '.keys[0].kty'
+# "RSA"
+
+# UserInfo unauthenticated — expect 401 with WWW-Authenticate: Bearer.
+curl -i https://jk-api-gateway.fly.dev/userinfo | head -5
+
+# /oauth/authorize happy-path — expect 302 to jk-login-ui.fly.dev/sign-in.
+# Use a real client_id and redirect_uri from client-registry-service.
+curl -i "https://jk-api-gateway.fly.dev/oauth/authorize?\
+response_type=code&\
+client_id=<registered-client-id>&\
+redirect_uri=https%3A%2F%2Fexample.com%2Fcb&\
+code_challenge=<base64url-s256>&\
+code_challenge_method=S256&\
+state=xyz" | head -5
+# HTTP/2 302
+# location: https://jk-login-ui.fly.dev/sign-in?login_challenge=<uuid>
+```
+
+If `/oauth/authorize` returns `501 Not Implemented`, `AUTH_LOGIN_UI_URL` is unset on `jk-auth-server`. If it returns 404, the gateway route is missing — check `gateway.yaml`.
+
+### Troubleshooting
+
+| Symptom | Likely cause | First check |
+|---|---|---|
+| `/.well-known/*` returns 404 at gateway | gateway route missing | `fly ssh console -a jk-api-gateway -C 'cat /app/gateway.yaml'` for the `/.well-known` route |
+| `/userinfo` returns 404 at gateway | gateway route missing | same as above for the `/userinfo` route |
+| `/oauth/authorize` returns 501 | `AUTH_LOGIN_UI_URL` unset on `jk-auth-server` | `fly secrets list -a jk-auth-server \| grep LOGIN_UI` |
+| `/oauth/authorize` 302s to login-ui but login-ui returns 500 | login-ui can't reach `jk-auth-server` or the shared token mismatches | `fly logs -a jk-login-ui`; verify `LOGIN_UI_AUTH_SERVER_SERVICE_TOKEN` on login-ui equals `AUTH_LOGIN_UI_SERVICE_TOKEN` on auth-server |
+| `jk-login-ui.fly.dev` doesn't resolve | app isn't created or deploy hasn't run | `fly apps list \| grep jk-login-ui`; `fly status -a jk-login-ui` |
+| Signed-in user bounces back to sign-in | login-ui's call to `/internal/issue-code` is 401 | token mismatch (see above) OR challenge expired — check the auth-server log for `challenge not found` |
+
 ## Done state
 
 The runbook is complete when:
