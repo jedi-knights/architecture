@@ -25,13 +25,14 @@ graph LR
         AE[apperrors<br/>structured errors]
         CT[container<br/>DI + scoping]
         HU[httputil<br/>JSON responses]
-        HM[httpmw<br/>middleware + server]
+        HM[httpmw<br/>middleware]
+        HS[httpserver<br/>server lifecycle]
         JU[jwtutil<br/>HS256 / RS256 / OIDC]
         TU[testutil<br/>test helpers]
     end
 
     AE --> HU
-    HU --> HM
+    HU --> HS
     HM -.uses logger.-> GL
     HU -.uses logger.-> GL[go-logging]
     TU -.uses logger.-> GL
@@ -44,7 +45,7 @@ graph LR
 ```
 
 `httputil` depends on `apperrors` (it maps `ErrorCode` to HTTP status);
-`httpmw` depends on `httputil` for `WriteJSON`. Everything else is independently usable.
+`httpserver` depends on `httputil` for `WriteJSON`. Everything else is independently usable.
 
 ## Packages
 
@@ -82,7 +83,7 @@ Cycle detection is goroutine-local — the resolution stack lives on
 | `WriteError(w, err)` | Maps `AppError` → JSON error envelope |
 | `ErrorResponse`, `HTTPStatus()` | Wire shape + status mapping |
 
-### `httpmw` — shared HTTP middleware and server lifecycle
+### `httpmw` — shared HTTP middleware
 
 Design and tiering: [ADR-0001](adr/0001-shared-http-middleware.md). Tier 1 is implemented.
 
@@ -90,8 +91,14 @@ Design and tiering: [ADR-0001](adr/0001-shared-http-middleware.md). Tier 1 is im
 |---|---|
 | `Stack(logger, opts...)` | `RequestID → TraceID → Recovery → Logging`; ordering is enforced, not conventional |
 | `RequestID`, `TraceID`, `Logging`, `Recovery` | Individual pieces (moved from `httputil`; renamed without the `Middleware` suffix) |
+
+### `httpserver` — server lifecycle
+
+| Surface | Notes |
+|---|---|
+| `New(addr, h, opts...)`, `Run`, `Serve` | Standard timeouts, SIGINT/SIGTERM, graceful shutdown |
 | `HealthHandler`, `ReadyHandler(checks...)` | Liveness / readiness; readiness never leaks check errors |
-| `NewServer(addr, h, opts...)`, `Run`, `Serve` | Standard timeouts, SIGINT/SIGTERM, graceful shutdown |
+| `StartMetricsServer`, `DefaultMetricsAddr`, `DefaultMetricsPath` | Prometheus scrape listener (moved from `httputil`) |
 
 ### `jwtutil` — JWT signing and parsing
 

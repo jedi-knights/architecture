@@ -41,7 +41,9 @@ re-implement, not something the library enforces.
 Add a new package **`github.com/jedi-knights/go-platform/httpmw`**, delivered
 in three tiers. Each tier ships as its own go-platform release.
 
-`httpmw` is a new package rather than additions to `httputil` because Tier 3
+Three packages with one responsibility each: `httputil` (response helpers),
+`httpmw` (middleware), `httpserver` (server lifecycle, health handlers, metrics
+listener). `httpmw` is a new package rather than additions to `httputil` because Tier 3
 (auth) depends on `jwtutil`, and `httputil`'s dependencies are deliberately
 limited to `apperrors` (see go-platform `CLAUDE.md`: "each package is
 independently usable").
@@ -52,8 +54,8 @@ three existing middleware are moved, not wrapped, and renamed without the
 `httputil.LoggingMiddleware` → `httpmw.Logging`,
 `httputil.RecoveryMiddleware` → `httpmw.Recovery` (and the `Logger` alias).
 `httputil` keeps only response helpers (`WriteJSON`, `WriteError`,
-`HTTPStatus`); `httpmw` imports it for `WriteJSON` and never the reverse, so
-there is no forwarding layer and no import cycle. This is a breaking change,
+`HTTPStatus`); `httpserver` imports it for `WriteJSON` and never the reverse, so
+there is no forwarding layer and no import cycle. `httpmw` depends on neither. This is a breaking change,
 acceptable under go-platform's v0.x policy; consumers migrate when they bump
 the module (see Rollout).
 
@@ -65,9 +67,15 @@ the module (see Rollout).
 | `Stack(logger, opts...) func(http.Handler) http.Handler` | Composes `RequestID → TraceID → Recovery → Logging` in the one correct order. Fixes defects 1–3 by making the order impossible to get wrong. |
 | `RequestID` | Sets `X-Request-ID` and the context request ID. Inbound value is reused only if it is a canonical UUID v4 (same log-injection rule `TraceIDMiddleware` applies); otherwise a fresh one is generated. |
 | `WithSkipLogPaths(paths ...string)` | `Stack` option. Exact-match paths bypass the access-log line (recovery, trace and request IDs still apply). Default: `/health`. Passing no arguments disables skipping. |
+
+**Server lifecycle lives in a separate package, `go-platform/httpserver`**, because it is not middleware:
+
+| Export | Purpose |
+|---|---|
 | `HealthHandler()` | Liveness: `200 {"status":"ok"}`. |
 | `ReadyHandler(checks ...ReadyCheck)` | Readiness: runs checks with a bounded timeout; `200 {"status":"ok"}` or `503 {"status":"unavailable"}`. Never returns the failing check's error text. |
-| `NewServer(addr, handler, opts...)` / `(*Server).Run(ctx)` / `Serve(ctx, ln)` | `http.Server` with standard timeouts (`ReadHeaderTimeout` 5s, `ReadTimeout` 15s, `WriteTimeout` 15s, `IdleTimeout` 60s), SIGINT/SIGTERM handling, and graceful shutdown (default 30s budget). Options: `WithReadHeaderTimeout`, `WithReadTimeout`, `WithWriteTimeout`, `WithIdleTimeout`, `WithShutdownTimeout`. `HTTPServer()` is an escape hatch for TLS config and similar. |
+| `StartMetricsServer(addr, path, handler)` | The fleet-wide Prometheus scrape listener (moved from `httputil`, shipped in v0.11.0). Built on `New` with tighter timeouts; reports the bound address. |
+| `New(addr, handler, opts...)` / `(*Server).Run(ctx)` / `Serve(ctx, ln)` | `http.Server` with standard timeouts (`ReadHeaderTimeout` 5s, `ReadTimeout` 15s, `WriteTimeout` 15s, `IdleTimeout` 60s), SIGINT/SIGTERM handling, and graceful shutdown (default 30s budget). Options: `WithReadHeaderTimeout`, `WithReadTimeout`, `WithWriteTimeout`, `WithIdleTimeout`, `WithShutdownTimeout`. `HTTPServer()` is an escape hatch for TLS config and similar. |
 
 `otelhttp` stays in each service's `main.go`: pulling it into `httpmw` would
 add a heavy dependency to every consumer, and the span-name formatter is
@@ -145,8 +153,8 @@ with a trusted-proxy helper for Fly's `Fly-Client-IP`).
 
 ## Rollout
 
-1. **Tier 1** — release go-platform (breaking: middleware moved out of
-   `httputil`); migrate each service's `routes.go` to `httpmw.Stack` and `main.go` to `httpmw.NewServer(...).Run(ctx)`; replace
+1. **Tier 1** — release go-platform (breaking: middleware and the metrics server moved out of
+   `httputil`); migrate each service's `routes.go` to `httpmw.Stack` and `main.go` to `httpserver.New(...).Run(ctx)`; replace
    per-service `Health` handlers where the Swagger annotations allow. One PR
    per service, `refactor(<service>)`. `entitlements-service` first (no
    middleware to replace), then the six services with the ordering defect.
