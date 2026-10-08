@@ -614,6 +614,45 @@ After the test-mode smoke passes:
 | `/billing/plans` shows empty | Lago has no active plans, or `LOGIN_UI_BILLING_LAGO_API_KEY` is unset | `curl -H "Authorization: Bearer $LAGO_API_KEY" .../api/v1/plans` |
 | `/billing/checkout` returns 500 | Lago can't reach Stripe | `fly logs -a jk-lago-api` |
 
+### verify-metering pipeline probe
+
+The daily workflow in [`jk-metering/.github/workflows/verify-metering.yml`](https://github.com/jedi-knights/jk-metering/blob/main/.github/workflows/verify-metering.yml)
+runs `scripts/verify-metering.sh` against staging. A failed scheduled
+run files an issue on `jk-metering` tagged `ops`/`metering` with a link
+to the Actions run. Interpret the failure by locating the step that
+exited non-zero in the Actions log and mapping it below.
+
+**Exit codes.** `0` verified; `1` real pipeline failure (step-specific
+detail on stderr); `2` configuration error (missing secret, variable,
+or binary on the runner).
+
+**Workflow setup steps** (fire before the script):
+
+| Step | Failure signal | Likely cause | First check |
+|---|---|---|---|
+| Set up flyctl | action step red | GitHub Marketplace or Fly outage | https://status.flyio.net |
+| Open MPG proxy to audit Postgres | `fly mpg proxy did not bind localhost:5432 within 15s` | `FLY_API_TOKEN` revoked or missing; `METERING_AUDIT_PG_CLUSTER_ID` points at the wrong cluster; MPG cluster unavailable | `fly mpg list` with the same token; verify cluster ID matches `jk-identity-pg` |
+| Install psql client | apt-get failure | GitHub-hosted runner image regression | Rerun; if persistent, pin a specific `ubuntu-24.04` runner |
+
+**Script steps** (`scripts/verify-metering.sh`, four steps):
+
+| Step | Failure signal on stderr | Likely cause | First check |
+|---|---|---|---|
+| 1/4 emit | `ingest returned <code>, expected 202` | `jk-metering-ingest` is down, auth broken, or payload rejected | `fly status -a jk-metering-ingest`; `fly logs -a jk-metering-ingest`; verify `METERING_TEST_TOKEN` has `metering:emit` scope and is signed by the current JWKS |
+| 2/4 locate audit row | `no audit_events row found for probe_id=X after Ns` | Ingest returned 202 but durable sink failed to persist, OR `METERING_AUDIT_DSN` points at a different database than ingest writes to | `fly logs -a jk-metering-ingest` for `durable sink: insert` errors; confirm the DSN in the secret matches `jk-identity-pg` / `audit_events` |
+| 3/4 wait for consumed_at | `worker did not set consumed_at within Ns (event_id=X)` | Row is in `audit_events` but the worker is not draining — process down, stuck, or lag past the poll interval | `fly status -a jk-metering`; `fly logs -a jk-metering --no-tail \| grep heartbeat \| tail -5` — zero deltas on consecutive heartbeats confirms a stall |
+| 4/4 Lago lookup | `Lago returned <code>` or `expected 1 Lago event, got <n>` | Worker drained the row but Lago rejected the push (schema mismatch), or Lago API unreachable, or the event was deduped against a prior probe with the same `transaction_id` | `fly status -a jk-lago-api`; `fly logs -a jk-metering` for `POST /api/v1/events` responses; verify Lago has the billable metric filter excluding `event_type=verify.probe` (otherwise probes hit real invoices — see §6) |
+
+**Behavioral notes:**
+
+- Manual `workflow_dispatch` failures do **not** file an issue. Use the
+  Actions log directly while iterating on fixes.
+- The script emits one real `audit_events` row and one real Lago event
+  per run. Filter `event_type=verify.probe` out of any billable-metric
+  Lago filter so probes do not inflate invoices.
+- Each run uses a fresh `probe_id` (`probe-<unix-ts>-<rand4>`), so
+  reruns never collide with prior probes.
+
 ## Done state
 
 The runbook is complete when:
