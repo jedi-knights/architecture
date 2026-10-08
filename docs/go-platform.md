@@ -24,12 +24,16 @@ graph LR
     subgraph go-platform
         AE[apperrors<br/>structured errors]
         CT[container<br/>DI + scoping]
-        HU[httputil<br/>JSON + middleware]
+        HU[httputil<br/>JSON responses]
+        HM[httpmw<br/>middleware]
+        HS[httpserver<br/>server lifecycle]
         JU[jwtutil<br/>HS256 / RS256 / OIDC]
         TU[testutil<br/>test helpers]
     end
 
     AE --> HU
+    HU --> HS
+    HM -.uses logger.-> GL
     HU -.uses logger.-> GL[go-logging]
     TU -.uses logger.-> GL
 
@@ -40,8 +44,8 @@ graph LR
     Services --> TU
 ```
 
-`httputil` is the only package that depends on `apperrors` (it maps `ErrorCode`
-to HTTP status). Everything else is independently usable.
+`httputil` depends on `apperrors` (it maps `ErrorCode` to HTTP status);
+`httpserver` depends on `httputil` for `WriteJSON`. Everything else is independently usable.
 
 ## Packages
 
@@ -71,14 +75,30 @@ returns `AppError`; the HTTP layer translates.
 Cycle detection is goroutine-local — the resolution stack lives on
 `context.Context`, so concurrent resolves of overlapping graphs don't false-positive.
 
-### `httputil` — HTTP responses + middleware
+### `httputil` — HTTP responses
 
 | Surface | Notes |
 |---|---|
 | `WriteJSON(w, status, body)` | Encodes to `bytes.Buffer` first → guarantees 500 on encode failure (not 200-with-truncated-body) |
 | `WriteError(w, err)` | Maps `AppError` → JSON error envelope |
 | `ErrorResponse`, `HTTPStatus()` | Wire shape + status mapping |
-| `TraceIDMiddleware`, `RecoveryMiddleware`, `LoggingMiddleware` | Ordering matters: trace → recovery → logging → auth → handler |
+
+### `httpmw` — shared HTTP middleware
+
+Design and tiering: [ADR-0001](adr/0001-shared-http-middleware.md). Tier 1 is implemented.
+
+| Surface | Notes |
+|---|---|
+| `Stack(logger, opts...)` | `RequestID → TraceID → Recovery → Logging`; ordering is enforced, not conventional |
+| `RequestID`, `TraceID`, `Logging`, `Recovery` | Individual pieces (moved from `httputil`; renamed without the `Middleware` suffix) |
+
+### `httpserver` — server lifecycle
+
+| Surface | Notes |
+|---|---|
+| `New(addr, h, opts...)`, `Run`, `Serve` | Standard timeouts, SIGINT/SIGTERM, graceful shutdown |
+| `HealthHandler`, `ReadyHandler(checks...)` | Liveness / readiness; readiness never leaks check errors |
+| `StartMetricsServer`, `DefaultMetricsAddr`, `DefaultMetricsPath` | Prometheus scrape listener (moved from `httputil`) |
 
 ### `jwtutil` — JWT signing and parsing
 
