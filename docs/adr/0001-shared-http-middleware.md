@@ -185,9 +185,9 @@ one PR per service; what actually happened, and why, is recorded below.*
 |---|---|---|
 | `httpmw`, `httpserver` released | go-platform #24 → v1.0.0 | Done |
 | Workspace-wide bump; every `routes.go` on `httpmw.Stack`; entitlements-service on `httpserver` and the shared health handler | identity-platform-go #242 | Done |
-| Remaining seven `main.go` files on `httpserver.New(...).Run` | identity-platform-go #243 | In review |
-| `TraceID` uses the active OTel trace ID | go-platform #25 | In review |
-| Services from `otel.Init` to `otel.New` (metrics listener, span-aware logger) | identity-platform-go | Pending go-platform#25 release |
+| Remaining seven `main.go` files on `httpserver.New(...).Run` | identity-platform-go #243 | Done |
+| `TraceID` uses the active OTel trace ID | go-platform #25 → v1.1.0 | Done |
+| Services from `otel.Init` to `otel.New` (metrics listener, span-aware logger, Fly `[metrics]`) | identity-platform-go #244 | In review |
 | `jk-metering` ingest on `httpmw.Stack` and `httpserver` | jk-metering | Pending |
 
 Per-service `Health` handlers that carry Swagger annotations (six services) are
