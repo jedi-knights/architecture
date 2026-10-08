@@ -1,6 +1,6 @@
 # ADR-0001: Shared HTTP middleware in `go-platform/httpmw`
 
-- **Status:** Accepted (Tier 1 implemented; Tiers 2–3 pending)
+- **Status:** Accepted (Tier 1 implemented in go-platform and adopted by the identity-platform-go services; Tiers 2–3 pending; see [Rollout](#rollout))
 - **Date:** 2026-10-08
 - **Scope:** every Go HTTP service in the portfolio — the eight services in
   `identity-platform-go/services/` and `jk-metering` ingest.
@@ -153,20 +153,65 @@ with a trusted-proxy helper for Fly's `Fly-Client-IP`).
 
 ## Rollout
 
-1. **Tier 1** — release go-platform (breaking: middleware and the metrics server moved out of
-   `httputil`); migrate each service's `routes.go` to `httpmw.Stack` and `main.go` to `httpserver.New(...).Run(ctx)`; replace
-   per-service `Health` handlers where the Swagger annotations allow. One PR
-   per service, `refactor(<service>)`. `entitlements-service` first (no
-   middleware to replace), then the six services with the ordering defect.
-2. **Tier 2** — release, then replace the inline secret check and limiter in
-   `auth-server` and `token-introspection-service`.
-3. **Tier 3** — release, then migrate `example-resource-service` and
-   `jk-metering`. `RequireDPoP` moves last because only one service uses it.
+*Amended 2026-10-08 after the first migrations. The original plan assumed
+one PR per service; what actually happened, and why, is recorded below.*
+
+### Lessons that changed the plan
+
+1. **A breaking go-platform release must land across the whole
+   `identity-platform-go` workspace at once.** The repo uses a `go.work`, so
+   every service builds against the *highest* go-platform version any module
+   requires. Bumping `entitlements-service` alone to v1.0.0 stopped the other
+   seven services compiling (they still called `httputil.TraceIDMiddleware`).
+   Per-service PRs are therefore only possible for changes that do not touch
+   removed or renamed go-platform API. `jk-metering` lives in its own repo with
+   its own `go.mod` and migrates independently.
+2. **`feat(...)!` releases a major version.** go-platform's release tooling
+   turned the breaking `httpmw` commit into **v1.0.0**, not v0.12.0. The module
+   stays at v1 without a `/v1` path suffix; treat v1.x as the API-stability
+   commitment go-platform's `CLAUDE.md` describes.
+3. **Trace identity needs one source of truth.** Once services wrap the stack
+   in `otelhttp` (as they already did), a span is always on the request
+   context, so `Logging` reports the span's `trace_id` while `TraceID` kept
+   echoing an unrelated UUID in `X-Trace-ID`. The header a client quotes would
+   not match the log line or the trace. `httpmw.TraceID` now prefers the active
+   span's trace ID (go-platform#25); without a span it behaves as before. This
+   had to land before services moved from `otel.Init` (which installs no
+   provider when tracing is off) to `otel.New` (which always installs one).
+
+### Tier 1 — status
+
+| Step | Where | State |
+|---|---|---|
+| `httpmw`, `httpserver` released | go-platform #24 → v1.0.0 | Done |
+| Workspace-wide bump; every `routes.go` on `httpmw.Stack`; entitlements-service on `httpserver` and the shared health handler | identity-platform-go #242 | Done |
+| Remaining seven `main.go` files on `httpserver.New(...).Run` | identity-platform-go #243 | In review |
+| `TraceID` uses the active OTel trace ID | go-platform #25 | In review |
+| Services from `otel.Init` to `otel.New` (metrics listener, span-aware logger) | identity-platform-go | Pending go-platform#25 release |
+| `jk-metering` ingest on `httpmw.Stack` and `httpserver` | jk-metering | Pending |
+
+Per-service `Health` handlers that carry Swagger annotations (six services) are
+kept for now; only `entitlements-service` uses `httpserver.HealthHandler`.
+
+### Tier 2
+
+Release, then replace the inline secret check and limiter in `auth-server` and
+`token-introspection-service`. Because the services share a workspace, ship the
+go-platform bump and every call-site change in one PR unless the release is
+purely additive.
+
+### Tier 3
+
+Release, then migrate `example-resource-service` and `jk-metering`.
+`RequireDPoP` moves last because only one service uses it. The same workspace
+rule applies if the release removes anything the other services use.
 
 ## Open questions
 
 - Should `Stack` add `otelhttp` behind an optional sub-package so the span
-  formatter is shared? Deferred until Tier 1 migrations show whether the
-  per-service wrapper is actually duplicated in practice.
+  formatter is shared? The migrations confirmed all eight services repeat the
+  same `otelhttp.NewHandler(... WithSpanNameFormatter(method + path))` wrapper
+  and the same tracing/metrics bootstrap helper, so this is now a real
+  candidate; decide once the `otel.New` migration lands.
 - Fixed-window versus token-bucket for the Tier 2 limiter; the existing
   behavior is fixed-window and is the default until a service needs more.
