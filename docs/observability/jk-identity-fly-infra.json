@@ -1,0 +1,710 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {"type": "grafana", "uid": "-- Grafana --"},
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "description": "Identity Platform — infrastructure overview sourced entirely from Fly.io's hosted Prometheus metrics. No app-level /metrics instrumentation required. Covers jk-api-gateway, jk-auth-server, jk-identity-service, jk-authorization-policy-service, jk-client-registry-service, jk-token-introspection-service, plus jk-login-ui and jk-example-resource-service when deployed.",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "liveNow": false,
+  "panels": [
+    {
+      "id": 1,
+      "type": "row",
+      "title": "Service Health",
+      "collapsed": false,
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 0},
+      "panels": []
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Running instances by service",
+      "description": "Number of healthy instances per app, derived from fly_instance_up == 1.",
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "gridPos": {"h": 5, "w": 8, "x": 0, "y": 1},
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {"type": "prometheus", "uid": "${datasource}"},
+          "expr": "count by (app) (fly_instance_up{app=~\"$app\", region=~\"$region\"} == 1)",
+          "legendFormat": "{{app}}",
+          "editorMode": "code",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "red", "value": null},
+              {"color": "green", "value": 1}
+            ]
+          },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false},
+        "textMode": "value_and_name"
+      }
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Instances currently down",
+      "description": "Instances reporting fly_instance_up == 0. Any value > 0 is a hard incident signal.",
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "gridPos": {"h": 5, "w": 8, "x": 8, "y": 1},
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {"type": "prometheus", "uid": "${datasource}"},
+          "expr": "count(fly_instance_up{app=~\"$app\", region=~\"$region\"} == 0) OR on() vector(0)",
+          "legendFormat": "down",
+          "editorMode": "code",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "green", "value": null},
+              {"color": "red", "value": 1}
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false},
+        "textMode": "value"
+      }
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Instance count over time",
+      "description": "Per-service healthy instance count. Useful for spotting rolling-restart gaps or scale-to-zero behavior.",
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "gridPos": {"h": 5, "w": 8, "x": 16, "y": 1},
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {"type": "prometheus", "uid": "${datasource}"},
+          "expr": "count by (app) (fly_instance_up{app=~\"$app\", region=~\"$region\"} == 1)",
+          "legendFormat": "{{app}}",
+          "editorMode": "code",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "stepAfter",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "stacking": {"mode": "none", "group": "A"},
+            "pointSize": 5
+          },
+          "color": {"mode": "palette-classic"}
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {"displayMode": "list", "placement": "bottom", "showLegend": true, "calcs": []},
+        "tooltip": {"mode": "multi", "sort": "none"}
+      }
+    },
+    {
+      "id": 5,
+      "type": "row",
+      "title": "HTTP Traffic — Public Edge (jk-api-gateway)",
+      "collapsed": false,
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 6},
+      "panels": []
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Edge requests/sec by status",
+      "description": "Requests hitting fly-edge on jk-api-gateway, broken down by response status class.",
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "gridPos": {"h": 7, "w": 8, "x": 0, "y": 7},
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {"type": "prometheus", "uid": "${datasource}"},
+          "expr": "sum by (status) (rate(fly_edge_http_responses_count{app=\"jk-api-gateway\", region=~\"$region\"}[5m]))",
+          "legendFormat": "{{status}}",
+          "editorMode": "code",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "fillOpacity": 15,
+            "stacking": {"mode": "normal", "group": "A"}
+          },
+          "color": {"mode": "palette-classic"}
+        },
+        "overrides": [
+          {"matcher": {"id": "byRegexp", "options": "^5.."}, "properties": [{"id": "color", "value": {"fixedColor": "red", "mode": "fixed"}}]},
+          {"matcher": {"id": "byRegexp", "options": "^4.."}, "properties": [{"id": "color", "value": {"fixedColor": "orange", "mode": "fixed"}}]},
+          {"matcher": {"id": "byRegexp", "options": "^2.."}, "properties": [{"id": "color", "value": {"fixedColor": "green", "mode": "fixed"}}]}
+        ]
+      },
+      "options": {
+        "legend": {"displayMode": "list", "placement": "bottom", "showLegend": true, "calcs": ["mean", "max"]},
+        "tooltip": {"mode": "multi", "sort": "desc"}
+      }
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "Edge 5xx error ratio (%)",
+      "description": "Fraction of edge responses from jk-api-gateway returning 5xx. Alert territory above ~1% sustained.",
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "gridPos": {"h": 7, "w": 8, "x": 8, "y": 7},
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {"type": "prometheus", "uid": "${datasource}"},
+          "expr": "100 * sum(rate(fly_edge_http_responses_count{app=\"jk-api-gateway\", status=~\"5..\", region=~\"$region\"}[5m])) / clamp_min(sum(rate(fly_edge_http_responses_count{app=\"jk-api-gateway\", region=~\"$region\"}[5m])), 1)",
+          "legendFormat": "5xx %",
+          "editorMode": "code",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "min": 0,
+          "max": 100,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "gradientMode": "opacity"
+          },
+          "color": {"mode": "thresholds"},
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "green", "value": null},
+              {"color": "yellow", "value": 0.5},
+              {"color": "red", "value": 1}
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {"displayMode": "list", "placement": "bottom", "showLegend": true, "calcs": ["mean", "max"]},
+        "tooltip": {"mode": "single", "sort": "none"}
+      }
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "Edge response latency (p50 / p95 / p99)",
+      "description": "fly-edge response time percentiles for jk-api-gateway, computed from the histogram buckets.",
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "gridPos": {"h": 7, "w": 8, "x": 16, "y": 7},
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {"type": "prometheus", "uid": "${datasource}"},
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(fly_edge_http_response_time_seconds_bucket{app=\"jk-api-gateway\", region=~\"$region\"}[5m])))",
+          "legendFormat": "p50",
+          "editorMode": "code",
+          "range": true
+        },
+        {
+          "refId": "B",
+          "datasource": {"type": "prometheus", "uid": "${datasource}"},
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(fly_edge_http_response_time_seconds_bucket{app=\"jk-api-gateway\", region=~\"$region\"}[5m])))",
+          "legendFormat": "p95",
+          "editorMode": "code",
+          "range": true
+        },
+        {
+          "refId": "C",
+          "datasource": {"type": "prometheus", "uid": "${datasource}"},
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(fly_edge_http_response_time_seconds_bucket{app=\"jk-api-gateway\", region=~\"$region\"}[5m])))",
+          "legendFormat": "p99",
+          "editorMode": "code",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 0
+          },
+          "color": {"mode": "palette-classic"}
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {"displayMode": "list", "placement": "bottom", "showLegend": true, "calcs": ["mean", "max"]},
+        "tooltip": {"mode": "multi", "sort": "desc"}
+      }
+    },
+    {
+      "id": 9,
+      "type": "row",
+      "title": "HTTP Traffic — Per Service (fly-proxy)",
+      "collapsed": false,
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 14},
+      "panels": []
+    },
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "Requests/sec per service (app-proxy)",
+      "description": "fly_app_http_responses_count rate, grouped by app. Only present for apps declared as http services in fly.toml. Internal (.internal) services with http service type are included.",
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "gridPos": {"h": 7, "w": 8, "x": 0, "y": 15},
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {"type": "prometheus", "uid": "${datasource}"},
+          "expr": "sum by (app) (rate(fly_app_http_responses_count{app=~\"$app\", region=~\"$region\"}[5m]))",
+          "legendFormat": "{{app}}",
+          "editorMode": "code",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10
+          },
+          "color": {"mode": "palette-classic"}
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {"displayMode": "table", "placement": "bottom", "showLegend": true, "calcs": ["mean", "max"]},
+        "tooltip": {"mode": "multi", "sort": "desc"}
+      }
+    },
+    {
+      "id": 11,
+      "type": "timeseries",
+      "title": "5xx responses/sec per service (app-proxy)",
+      "description": "fly_app_http_responses_count rate filtered to 5xx status. Non-zero here is a service-level fault, independent of edge metrics.",
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "gridPos": {"h": 7, "w": 8, "x": 8, "y": 15},
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {"type": "prometheus", "uid": "${datasource}"},
+          "expr": "sum by (app) (rate(fly_app_http_responses_count{app=~\"$app\", status=~\"5..\", region=~\"$region\"}[5m]))",
+          "legendFormat": "{{app}}",
+          "editorMode": "code",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 20
+          },
+          "color": {"mode": "palette-classic"}
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {"displayMode": "table", "placement": "bottom", "showLegend": true, "calcs": ["mean", "max"]},
+        "tooltip": {"mode": "multi", "sort": "desc"}
+      }
+    },
+    {
+      "id": 12,
+      "type": "timeseries",
+      "title": "Concurrent requests per service",
+      "description": "fly_app_concurrency — in-flight connections at the fly-proxy layer. Spikes here plus elevated 5xx typically mean the service is overwhelmed.",
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "gridPos": {"h": 7, "w": 8, "x": 16, "y": 15},
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {"type": "prometheus", "uid": "${datasource}"},
+          "expr": "sum by (app) (fly_app_concurrency{app=~\"$app\", region=~\"$region\"})",
+          "legendFormat": "{{app}}",
+          "editorMode": "code",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10
+          },
+          "color": {"mode": "palette-classic"}
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {"displayMode": "table", "placement": "bottom", "showLegend": true, "calcs": ["mean", "max"]},
+        "tooltip": {"mode": "multi", "sort": "desc"}
+      }
+    },
+    {
+      "id": 13,
+      "type": "row",
+      "title": "Compute",
+      "collapsed": false,
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 22},
+      "panels": []
+    },
+    {
+      "id": 14,
+      "type": "timeseries",
+      "title": "CPU utilization % per service",
+      "description": "Non-idle CPU time rate, aggregated across instance cores. Each unit = one core fully utilized (100% = 1.0 cores). Compare against the vCPU count on your Machines size.",
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "gridPos": {"h": 7, "w": 12, "x": 0, "y": 23},
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {"type": "prometheus", "uid": "${datasource}"},
+          "expr": "100 * avg by (app) (sum by (app, instance) (rate(fly_instance_cpu{mode!=\"idle\", app=~\"$app\", region=~\"$region\"}[5m])))",
+          "legendFormat": "{{app}}",
+          "editorMode": "code",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10
+          },
+          "color": {"mode": "palette-classic"}
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {"displayMode": "table", "placement": "bottom", "showLegend": true, "calcs": ["mean", "max"]},
+        "tooltip": {"mode": "multi", "sort": "desc"}
+      }
+    },
+    {
+      "id": 15,
+      "type": "timeseries",
+      "title": "Memory utilization % per service",
+      "description": "(mem_total - mem_available) / mem_total averaged across instances per app. Fly OOM-kills around 100% — tune the alert threshold accordingly.",
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "gridPos": {"h": 7, "w": 12, "x": 12, "y": 23},
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {"type": "prometheus", "uid": "${datasource}"},
+          "expr": "100 * avg by (app) ((fly_instance_memory_mem_total{app=~\"$app\", region=~\"$region\"} - fly_instance_memory_mem_available{app=~\"$app\", region=~\"$region\"}) / fly_instance_memory_mem_total{app=~\"$app\", region=~\"$region\"})",
+          "legendFormat": "{{app}}",
+          "editorMode": "code",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "min": 0,
+          "max": 100,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "thresholdsStyle": {"mode": "line"}
+          },
+          "color": {"mode": "palette-classic"},
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "green", "value": null},
+              {"color": "yellow", "value": 75},
+              {"color": "red", "value": 90}
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {"displayMode": "table", "placement": "bottom", "showLegend": true, "calcs": ["mean", "max"]},
+        "tooltip": {"mode": "multi", "sort": "desc"}
+      }
+    },
+    {
+      "id": 16,
+      "type": "timeseries",
+      "title": "Load average (1m) per service",
+      "description": "Linux-style load average over 1 minute. Rule of thumb: sustained load > vCPU count indicates saturation.",
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "gridPos": {"h": 7, "w": 12, "x": 0, "y": 30},
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {"type": "prometheus", "uid": "${datasource}"},
+          "expr": "avg by (app) (fly_instance_load_average{app=~\"$app\", region=~\"$region\", period=\"1m\"})",
+          "legendFormat": "{{app}}",
+          "editorMode": "code",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10
+          },
+          "color": {"mode": "palette-classic"}
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {"displayMode": "table", "placement": "bottom", "showLegend": true, "calcs": ["mean", "max"]},
+        "tooltip": {"mode": "multi", "sort": "desc"}
+      }
+    },
+    {
+      "id": 17,
+      "type": "timeseries",
+      "title": "Memory used (bytes) per service",
+      "description": "Absolute memory consumption. Useful for right-sizing Machines plans — compare against the memory ceiling for your plan tier.",
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "gridPos": {"h": 7, "w": 12, "x": 12, "y": 30},
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {"type": "prometheus", "uid": "${datasource}"},
+          "expr": "avg by (app) (fly_instance_memory_mem_total{app=~\"$app\", region=~\"$region\"} - fly_instance_memory_mem_available{app=~\"$app\", region=~\"$region\"})",
+          "legendFormat": "{{app}}",
+          "editorMode": "code",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10
+          },
+          "color": {"mode": "palette-classic"}
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {"displayMode": "table", "placement": "bottom", "showLegend": true, "calcs": ["mean", "max"]},
+        "tooltip": {"mode": "multi", "sort": "desc"}
+      }
+    },
+    {
+      "id": 18,
+      "type": "row",
+      "title": "Network",
+      "collapsed": false,
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 37},
+      "panels": []
+    },
+    {
+      "id": 19,
+      "type": "timeseries",
+      "title": "Network RX bytes/sec per service",
+      "description": "Inbound traffic rate. OAuth flows are generally not RX-heavy — a sustained spike without a matching request rate increase can indicate a client hammering a specific endpoint.",
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "gridPos": {"h": 7, "w": 12, "x": 0, "y": 38},
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {"type": "prometheus", "uid": "${datasource}"},
+          "expr": "sum by (app) (rate(fly_instance_net_recv_bytes{app=~\"$app\", region=~\"$region\"}[5m]))",
+          "legendFormat": "{{app}}",
+          "editorMode": "code",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "Bps",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10
+          },
+          "color": {"mode": "palette-classic"}
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {"displayMode": "table", "placement": "bottom", "showLegend": true, "calcs": ["mean", "max"]},
+        "tooltip": {"mode": "multi", "sort": "desc"}
+      }
+    },
+    {
+      "id": 20,
+      "type": "timeseries",
+      "title": "Network TX bytes/sec per service",
+      "description": "Outbound traffic rate. JWKS fetches, token payloads, and OIDC discovery responses show up here.",
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "gridPos": {"h": 7, "w": 12, "x": 12, "y": 38},
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {"type": "prometheus", "uid": "${datasource}"},
+          "expr": "sum by (app) (rate(fly_instance_net_sent_bytes{app=~\"$app\", region=~\"$region\"}[5m]))",
+          "legendFormat": "{{app}}",
+          "editorMode": "code",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "Bps",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10
+          },
+          "color": {"mode": "palette-classic"}
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {"displayMode": "table", "placement": "bottom", "showLegend": true, "calcs": ["mean", "max"]},
+        "tooltip": {"mode": "multi", "sort": "desc"}
+      }
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 39,
+  "tags": ["identity-platform", "fly.io", "infra", "jedi-knights"],
+  "templating": {
+    "list": [
+      {
+        "name": "datasource",
+        "type": "datasource",
+        "query": "prometheus",
+        "current": {},
+        "hide": 0,
+        "label": "Datasource",
+        "refresh": 1,
+        "regex": "",
+        "skipUrlSync": false
+      },
+      {
+        "name": "app",
+        "type": "query",
+        "datasource": {"type": "prometheus", "uid": "${datasource}"},
+        "definition": "label_values(fly_instance_up, app)",
+        "query": {
+          "qryType": 1,
+          "query": "label_values(fly_instance_up, app)",
+          "refId": "StandardVariableQuery"
+        },
+        "regex": "/^jk-(api-gateway|auth-server|identity-service|authorization-policy-service|client-registry-service|token-introspection-service|login-ui|example-resource-service)$/",
+        "includeAll": true,
+        "allValue": "jk-.*",
+        "multi": true,
+        "current": {"selected": true, "text": "All", "value": "$__all"},
+        "hide": 0,
+        "label": "Service",
+        "refresh": 2,
+        "sort": 1,
+        "skipUrlSync": false
+      },
+      {
+        "name": "region",
+        "type": "query",
+        "datasource": {"type": "prometheus", "uid": "${datasource}"},
+        "definition": "label_values(fly_instance_up{app=~\"$app\"}, region)",
+        "query": {
+          "qryType": 1,
+          "query": "label_values(fly_instance_up{app=~\"$app\"}, region)",
+          "refId": "StandardVariableQuery"
+        },
+        "regex": "",
+        "includeAll": true,
+        "allValue": ".*",
+        "multi": true,
+        "current": {"selected": true, "text": "All", "value": "$__all"},
+        "hide": 0,
+        "label": "Region",
+        "refresh": 2,
+        "sort": 1,
+        "skipUrlSync": false
+      }
+    ]
+  },
+  "time": {"from": "now-6h", "to": "now"},
+  "timepicker": {},
+  "timezone": "",
+  "title": "Identity Platform — Fly Infra Overview",
+  "uid": "jk-identity-fly-infra",
+  "version": 1,
+  "weekStart": ""
+}

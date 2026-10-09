@@ -142,6 +142,26 @@ lint + format in CI.
 | Compile-time interface checks | Go services (`var _ Port = (*Adapter)(nil)`) |
 | `typ` header enforcement on JWTs | `go-platform/jwtutil`, used by identity services |
 
+## Observability
+
+Every Go service in the fleet emits all three OpenTelemetry signals
+(metrics, logs, traces) through the shared `go-platform/otel`
+package — one `platformotel.Init(ctx, cfg)` call wires the lot. The
+end-to-end design (shared package shape, exporter choice, per-service
+instrument catalog, phased rollout) is in
+[`observability-strategy.md`](observability-strategy.md); the
+Grafana dashboards built on top live in
+[`observability.md`](observability.md).
+
+Metrics reach Fly's hosted Prometheus via a per-service `/metrics`
+endpoint on port 9464 declared under `[metrics]` in each
+`fly.<svc>.toml`. Traces and logs push via OTLP gRPC to a single
+backend (Grafana Cloud free tier is the first-deploy recommendation;
+the model is backend-agnostic).
+
+Missing observability wiring on a new service is a correctness defect,
+not a polish opportunity — treat it like missing tests.
+
 ## Agent identity and tool authorization
 
 The portfolio is being extended so autonomous AI agents are first-class

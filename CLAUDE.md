@@ -134,6 +134,20 @@ Stripe webhook URL for the Jedi Knights org:
 Refetch after any org create/delete via
 `fly ssh console -a jk-lago-api -C "bundle exec rails runner 'puts Organization.pluck(:name, :id)'"`.
 
+## Observability is non-negotiable
+
+Every Go service in the fleet (`identity-platform-go/services/*`,
+`api-gateway`, `jk-metering`, `jk-metering-ingest`, and any new
+service) must emit OpenTelemetry metrics, logs, and traces through
+the shared `go-platform/otel` package. The design lives in
+[`docs/observability-strategy.md`](docs/observability-strategy.md);
+dashboards built on top live in [`docs/observability.md`](docs/observability.md).
+
+When reviewing a service change, missing observability wiring (no
+`/metrics` endpoint, no `[metrics]` section in `fly.<svc>.toml`, no
+`otelhttp.NewHandler` wrap, no shared `platformotel.Init` call) is a
+**Must Fix** finding — not a Should Fix. Treat it like missing tests.
+
 ## Conventions
 
 - Every runbook fix that came from live discovery is a **Should Fix**
