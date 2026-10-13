@@ -631,7 +631,7 @@ or binary on the runner).
 | Step | Failure signal | Likely cause | First check |
 |---|---|---|---|
 | Set up flyctl | action step red | GitHub Marketplace or Fly outage | https://status.flyio.net |
-| Open MPG proxy to audit Postgres | `fly mpg proxy did not bind localhost:5432 within 15s` | `FLY_API_TOKEN` revoked or missing; `METERING_AUDIT_PG_CLUSTER_ID` points at the wrong cluster; MPG cluster unavailable | `fly mpg list` with the same token; verify cluster ID matches `jk-identity-pg` |
+| Open MPG proxy to audit Postgres | `flyctl mpg proxy did not bind localhost:5432 within 15s` | `FLY_API_TOKEN` revoked or missing; `METERING_AUDIT_PG_CLUSTER_ID` points at the wrong cluster; MPG cluster unavailable | `fly mpg list` with the same token; verify cluster ID matches `jk-identity-pg` |
 | Install psql client | apt-get failure | GitHub-hosted runner image regression | Rerun; if persistent, pin a specific `ubuntu-24.04` runner |
 
 **Script steps** (`scripts/verify-metering.sh`, four steps):
