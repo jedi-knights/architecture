@@ -732,6 +732,96 @@ If `/oauth/authorize` returns `501 Not Implemented`, `AUTH_LOGIN_UI_URL` is unse
 | `jk-login-ui.fly.dev` doesn't resolve | app isn't created or deploy hasn't run | `fly apps list \| grep jk-login-ui`; `fly status -a jk-login-ui` |
 | Signed-in user bounces back to sign-in | login-ui's call to `/internal/issue-code` is 401 | token mismatch (see above) OR challenge expired — check the auth-server log for `challenge not found` |
 
+## 12. Register OAuth clients
+
+Every OAuth client — the login-ui, the verify-metering probe, future
+Scout Sleuth agents — is a row in `jk-client-registry-service`'s client
+table. The service is `.internal`-only (no gateway route for admin
+operations; see CLAUDE.md infra table), so registration happens from
+inside the Fly 6PN. This section documents the one-time procedure.
+
+### Request shape
+
+`POST /clients` consumes a JSON body matching `domain.CreateClientRequest`
+([`services/client-registry-service/internal/domain/client.go`](https://github.com/jedi-knights/identity-platform-go/blob/main/services/client-registry-service/internal/domain/client.go)):
+
+| Field | Required | Default | Notes |
+|---|---|---|---|
+| `name` | yes | — | Human label; shown in `GET /clients` output |
+| `scopes` | yes | — | Allowed scopes; auth-server rejects grants that request anything outside this set (`grant_strategy.go:resolveScopes`) |
+| `grant_types` | yes | — | e.g. `["client_credentials"]`, `["authorization_code", "refresh_token"]` |
+| `redirect_uris` | yes for `authorization_code` | — | Pass `[]` for pure `client_credentials` clients |
+| `client_type` | no | `confidential` | `confidential` returns a `client_secret`; `public` does not (ADR-0009) |
+| `actor_type` | no | `service` | ADR-0015 — stamps `actor_type` on tokens this client issues |
+| `jwks_uri` | no | — | ADR-0023 RFC 7523 JWT-bearer client authentication |
+| `trusted_issuer_cert` | no | — | ADR-0026 RFC 7522 SAML IdP cert (PEM) |
+
+The response is `201 Created` with `domain.CreateClientResponse`. The
+`client_secret` field is **only returned on this one response** — no
+other endpoint re-exposes it. Capture it immediately or the client
+has to be deleted and recreated.
+
+### Register the verify-metering probe client
+
+The verify-metering workflow needs a `client_credentials` client with
+the `metering:emit:verify` scope (per
+[jk-metering/internal/ingest/handler.go `principalCanEmit`](https://github.com/jedi-knights/jk-metering/blob/main/internal/ingest/handler.go)
+and ADR-0019 §315–317). Register it from a hallpass session on the
+service itself:
+
+```bash
+fly ssh console -a jk-client-registry-service
+# inside the hallpass shell:
+curl -s -X POST http://localhost:8082/clients \
+  -H 'Content-Type: application/json' \
+  -d @- <<'JSON'
+{
+  "name": "verify-metering probe",
+  "scopes": ["metering:emit:verify"],
+  "grant_types": ["client_credentials"],
+  "redirect_uris": []
+}
+JSON
+```
+
+Response (abbreviated):
+
+```json
+{
+  "client_id": "<generated>",
+  "client_secret": "<generated — capture now, not retrievable later>",
+  "client_type": "confidential",
+  "actor_type": "service",
+  "scopes": ["metering:emit:verify"],
+  "grant_types": ["client_credentials"],
+  ...
+}
+```
+
+Copy the two values into `jedi-knights/jk-metering` repo secrets:
+
+```bash
+gh secret set METERING_CLIENT_ID     --repo jedi-knights/jk-metering --body '<client_id>'
+gh secret set METERING_CLIENT_SECRET --repo jedi-knights/jk-metering --body '<client_secret>'
+```
+
+The workflow uses them to mint a fresh bearer per run via `POST
+https://jk-api-gateway.fly.dev/oauth/token` (`grant_type=client_credentials`,
+`scope=metering:emit:verify`) — see
+[jk-metering#15](https://github.com/jedi-knights/jk-metering/issues/15)
+for the workflow change that consumes these secrets and un-pauses
+the daily cron.
+
+### Troubleshooting
+
+| Symptom | Likely cause | First check |
+|---|---|---|
+| `curl: (7) Failed to connect to localhost port 8082` from hallpass | `CLIENT_SERVER_PORT` has been changed from the fly.toml default | `fly ssh console -a jk-client-registry-service -C 'env \| grep CLIENT_SERVER_PORT'` |
+| `POST /clients` returns `400 invalid request body` | JSON body malformed (common: single-quoted shell string stripping inner quotes) | Pipe the body via a heredoc as shown above rather than inlining `-d '…'` |
+| `POST /clients` returns `201` but `client_secret` missing from response | `client_type: "public"` was set (public clients have no secret, ADR-0009) | Resend omitting `client_type` so the default `confidential` applies |
+| Later `/oauth/token` returns `403 scope not allowed: metering:emit:verify` | Client was registered without the scope in `scopes[]` | `GET /clients/<id>` from hallpass to verify; the admin surface has no scope-update endpoint, so delete and recreate with the correct `scopes` list |
+| Later `/oauth/token` returns `401 invalid_client` | `client_secret` was mis-captured or was never stored | Delete the registration (`DELETE /clients/<id>`) and recreate; the secret is not retrievable from the registry |
+
 ## Done state
 
 The runbook is complete when:
