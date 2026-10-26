@@ -766,61 +766,60 @@ has to be deleted and recreated.
 The verify-metering workflow needs a `client_credentials` client with
 the `metering:emit:verify` scope (per
 [jk-metering/internal/ingest/handler.go `principalCanEmit`](https://github.com/jedi-knights/jk-metering/blob/main/internal/ingest/handler.go)
-and ADR-0019 §315–317). Register it from a hallpass session on the
-service itself:
+and ADR-0019 §315–317). The service's container image is distroless —
+no `curl` on PATH inside `fly ssh console`'s hallpass shell — so
+registration goes through `fly proxy` from a laptop instead:
 
 ```bash
-fly ssh console -a jk-client-registry-service
-# inside the hallpass shell:
-curl -s -X POST http://localhost:8082/clients \
+# Shell A — hold open while registering:
+fly proxy 8082:8082 -a jk-client-registry-service
+
+# Shell B — localhost:8082 now reaches the production service via the 6PN.
+# 1. Idempotency check — expect [] if no probe client exists yet:
+curl -sS http://localhost:8082/clients \
+  | jq '[.[] | select(.name == "verify-metering probe")]'
+
+# 2. Register. Pipe response straight into a tmpfile so the secret stays
+#    off the terminal; shred on exit so it does not persist on disk:
+tmp=$(mktemp) && trap "shred -u '$tmp' 2>/dev/null || rm -f '$tmp'" EXIT
+curl -sS -X POST http://localhost:8082/clients \
   -H 'Content-Type: application/json' \
-  -d @- <<'JSON'
-{
-  "name": "verify-metering probe",
-  "scopes": ["metering:emit:verify"],
-  "grant_types": ["client_credentials"],
-  "redirect_uris": []
-}
-JSON
+  -d '{"name":"verify-metering probe","scopes":["metering:emit:verify"],"grant_types":["client_credentials"],"redirect_uris":[]}' \
+  > "$tmp"
+
+# 3. Push both halves to jk-metering repo secrets. --body - reads from
+#    stdin so the raw secret never materializes in a shell variable:
+jq -r .client_id     "$tmp" | gh secret set METERING_CLIENT_ID     --repo jedi-knights/jk-metering --body -
+jq -r .client_secret "$tmp" | gh secret set METERING_CLIENT_SECRET --repo jedi-knights/jk-metering --body -
+
+# 4. Confirm — names + timestamps only, values are write-only on GitHub's side:
+gh secret list --repo jedi-knights/jk-metering | grep -E 'METERING_CLIENT_(ID|SECRET)'
 ```
 
-Response (abbreviated):
+Response fields echoed by step 2 (the `tmp` file) match
+`domain.CreateClientResponse`: `client_id`, `client_secret`,
+`client_type: "confidential"`, `actor_type: "service"`, `scopes:
+["metering:emit:verify"]`, `grant_types: ["client_credentials"]`. The
+`client_secret` field is **only returned on this one response** — no
+other endpoint re-exposes it. The one-shot pipeline above captures it
+before anything else gets a chance to look.
 
-```json
-{
-  "client_id": "<generated>",
-  "client_secret": "<generated — capture now, not retrievable later>",
-  "client_type": "confidential",
-  "actor_type": "service",
-  "scopes": ["metering:emit:verify"],
-  "grant_types": ["client_credentials"],
-  ...
-}
-```
-
-Copy the two values into `jedi-knights/jk-metering` repo secrets:
-
-```bash
-gh secret set METERING_CLIENT_ID     --repo jedi-knights/jk-metering --body '<client_id>'
-gh secret set METERING_CLIENT_SECRET --repo jedi-knights/jk-metering --body '<client_secret>'
-```
-
-The workflow uses them to mint a fresh bearer per run via `POST
-https://jk-api-gateway.fly.dev/oauth/token` (`grant_type=client_credentials`,
-`scope=metering:emit:verify`) — see
+The workflow consumes these two secrets to mint a fresh bearer per
+run via `POST https://jk-api-gateway.fly.dev/oauth/token`
+(`grant_type=client_credentials`, `scope=metering:emit:verify`) — see
 [jk-metering#15](https://github.com/jedi-knights/jk-metering/issues/15)
-for the workflow change that consumes these secrets and un-pauses
-the daily cron.
+for the workflow change that un-pauses the daily cron.
 
 ### Troubleshooting
 
 | Symptom | Likely cause | First check |
 |---|---|---|
-| `curl: (7) Failed to connect to localhost port 8082` from hallpass | `CLIENT_SERVER_PORT` has been changed from the fly.toml default | `fly ssh console -a jk-client-registry-service -C 'env \| grep CLIENT_SERVER_PORT'` |
-| `POST /clients` returns `400 invalid request body` | JSON body malformed (common: single-quoted shell string stripping inner quotes) | Pipe the body via a heredoc as shown above rather than inlining `-d '…'` |
+| `fly ssh console -C "curl ..."` returns `exec: "curl": executable file not found in $PATH` | Service's container image is distroless — hallpass inherits that minimal env | Use `fly proxy` as shown above; `fly ssh console` is wrong-shape for this task |
+| `curl: (7) Failed to connect to localhost port 8082` from laptop | `fly proxy` not running (or died silently); or `CLIENT_SERVER_PORT` has drifted from the fly.toml default | Check Shell A is still open; `fly ssh console -a jk-client-registry-service -C 'env \| grep CLIENT_SERVER_PORT'` reports the live port |
+| `POST /clients` returns `400 invalid request body` | JSON body malformed (common: single-quoted shell string stripping inner quotes) | Keep the body on a single line with escaped quotes as shown above, or feed via a heredoc |
 | `POST /clients` returns `201` but `client_secret` missing from response | `client_type: "public"` was set (public clients have no secret, ADR-0009) | Resend omitting `client_type` so the default `confidential` applies |
-| Later `/oauth/token` returns `403 scope not allowed: metering:emit:verify` | Client was registered without the scope in `scopes[]` | `GET /clients/<id>` from hallpass to verify; the admin surface has no scope-update endpoint, so delete and recreate with the correct `scopes` list |
-| Later `/oauth/token` returns `401 invalid_client` | `client_secret` was mis-captured or was never stored | Delete the registration (`DELETE /clients/<id>`) and recreate; the secret is not retrievable from the registry |
+| Later `/oauth/token` returns `403 scope not allowed: metering:emit:verify` | Client was registered without the scope in `scopes[]` | `curl http://localhost:8082/clients/<id>` via the proxy to verify; the admin surface has no scope-update endpoint, so delete and recreate with the correct `scopes` list |
+| Later `/oauth/token` returns `401 invalid_client` | `client_secret` was mis-captured or was never stored | Delete the registration (`DELETE /clients/<id>` via the proxy) and recreate; the secret is not retrievable from the registry |
 
 ## Done state
 
