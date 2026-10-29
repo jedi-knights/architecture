@@ -208,20 +208,24 @@ Target: **Fly.io** (continues college-sports-api's current model).
 - One CI pipeline, per-service matrix build + deploy.
 - Per-service Dockerfile under `deploy/<svc>/Dockerfile` (multi-stage, distroless, static binary — college-sports-api's pattern).
 
+## Locked decisions (Phase 1)
+
+- **Platform library**: adopt `github.com/jedi-knights/go-platform` as a direct dependency. Already used by `college-sports-api` and the rest of the fleet. Provides `httpserver`, `httpmw`, `otel`, `container`, `apperrors`, `audit`, `jwtutil`, `testutil`. Services in this monorepo import it directly; `internal/platform/` holds only sports-platform-specific extensions, not duplicates of go-platform's packages.
+- **SQL layer**: `sqlc` generating pgx-compatible code. `go-platform` is already pgx-based, which rules out GORM (different driver layer); hand-written pgx has too much scan boilerplate as the catalog + stats schemas grow. Queries live in `internal/<svc>/store/queries/*.sql`; generated Go lands in `internal/<svc>/store/db/` and is checked in. Observability is non-negotiable per `architecture/CLAUDE.md` — every service wires through `go-platform/otel`.
+
 ## Open questions (decide before Phase 2)
 
-- `go-platform` shared lib (used by college-sports-api) — adopt as a dep, or build fresh in `internal/platform/`?
-- SQL layer: sqlc vs. pgx direct vs. GORM. Recommend sqlc for type safety + no runtime overhead.
-- Migrations: goose vs. atlas. Recommend atlas (declarative + diffing against live schema).
-- OpenAPI codegen: oapi-codegen vs. hand-written. Recommend oapi-codegen for both server stubs and typed clients that services use to call each other.
-- Observability: Fly's built-in Prom + logs, or external (Honeycomb, Datadog)?
+- Migrations tool: `goose` vs. `atlas`. Recommend `atlas` (declarative schema + diffing against live DB; integrates with sqlc's schema introspection).
+- OpenAPI codegen: `oapi-codegen` vs. hand-written. Recommend `oapi-codegen` for both server stubs and typed clients that services use to call each other.
+- Observability backend: Fly's built-in Prometheus + traces, or external (Honeycomb, Datadog)? Wiring via `go-platform/otel` is already decided; this is only the sink.
 
 ## Phases
 
 ### Phase 1 — scaffold + port scoreboard
 
-- [x] Scaffold monorepo (go.mod, Taskfile, dir layout) — this commit
-- [ ] Decide: `go-platform` shared lib vs. roll own
+- [x] Scaffold monorepo (go.mod, Taskfile, dir layout)
+- [x] Decide: adopt `go-platform` shared lib (not roll own)
+- [x] Decide SQL layer: `sqlc` → pgx-compatible generated code
 - [ ] Port `college-sports-api` into `cmd/scoreboard/` with minimal changes
 - [ ] CI pipeline (lint, test, build matrix)
 - [ ] Fly.io deploy for scoreboard
@@ -229,7 +233,6 @@ Target: **Fly.io** (continues college-sports-api's current model).
 ### Phase 2 — catalog + Postgres foundation
 
 - [ ] Choose migrations tool (atlas vs. goose)
-- [ ] Choose SQL layer (sqlc vs. pgx direct)
 - [ ] Schema: programs, teams, conferences, aliases
 - [ ] Seed loader from `seed/d1-wsoc.yaml`
 - [ ] Catalog service: CRUD + read API
