@@ -1,7 +1,7 @@
-# Sports Platform (Go Monorepo)
+# Cutline (Go Monorepo)
 
 Status: Design approved 2026-10-29
-Target repo: `github.com/jedi-knights/sports-platform`
+Target repo: `github.com/jedi-knights/cutline`
 Replaces: `college-sports-api`, `athletics-ingest-platform`, `wsoccer-stats`
 
 ## Goals
@@ -86,7 +86,7 @@ Four long-running Go services + one scheduled worker, sharing one Postgres + one
 ## Repo layout
 
 ```
-sports-platform/
+cutline/
 ├── cmd/
 │   ├── scoreboard/main.go
 │   ├── catalog/main.go
@@ -210,7 +210,7 @@ Target: **Fly.io** (continues college-sports-api's current model).
 
 ## Locked decisions (Phase 1)
 
-- **Platform library**: adopt `github.com/jedi-knights/go-platform` as a direct dependency. Already used by `college-sports-api` and the rest of the fleet. Provides `httpserver`, `httpmw`, `otel`, `container`, `apperrors`, `audit`, `jwtutil`, `testutil`. Services in this monorepo import it directly; `internal/platform/` holds only sports-platform-specific extensions, not duplicates of go-platform's packages.
+- **Platform library**: adopt `github.com/jedi-knights/go-platform` as a direct dependency. Already used by `college-sports-api` and the rest of the fleet. Provides `httpserver`, `httpmw`, `otel`, `container`, `apperrors`, `audit`, `jwtutil`, `testutil`. Services in this monorepo import it directly; `internal/platform/` holds only cutline-specific extensions, not duplicates of go-platform's packages.
 - **SQL layer**: `sqlc` generating pgx-compatible code. `go-platform` is already pgx-based, which rules out GORM (different driver layer); hand-written pgx has too much scan boilerplate as the catalog + stats schemas grow. Queries live in `internal/<svc>/store/queries/*.sql`; generated Go lands in `internal/<svc>/store/db/` and is checked in. Observability is non-negotiable per `architecture/CLAUDE.md` — every service wires through `go-platform/otel`.
 
 ## Open questions (decide before Phase 2)
